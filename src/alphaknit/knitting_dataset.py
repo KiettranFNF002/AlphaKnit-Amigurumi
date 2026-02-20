@@ -130,7 +130,7 @@ def make_dataloaders(dataset_dir: str, val_split: float = 0.1,
             return pt_dict["pc"], pt_dict["src"], pt_dict["tgt"]
 
         train_ds = (
-            wds.WebDataset(dataset_dir, resampled=False, shardshuffle=True)
+            wds.WebDataset(dataset_dir, resampled=False, shardshuffle=100)
             .shuffle(1000)
             .map(decode_and_extract)
             .batched(batch_size)
