@@ -364,7 +364,24 @@ def train(
     train_loader, val_loader = make_dataloaders(
         dataset_dir, val_split=val_split, batch_size=batch_size
     )
-    print(f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
+    
+    # Handle Webdataset/Streaming loaders that don't have len()
+    try:
+        t_len = len(train_loader)
+    except (TypeError, AttributeError):
+        t_len = "Streaming/Unknown"
+        
+    try:
+        v_len = len(val_loader) if val_loader is not None else 0
+    except (TypeError, AttributeError):
+        v_len = "Streaming/Unknown"
+        
+    print(f"Train batches: {t_len} | Val batches: {v_len}")
+
+    if device.type == "cpu" and torch.cuda.is_available():
+        print("WARNING: GPU is available but model is training on CPU. Check device_str.")
+    elif device.type == "cpu":
+        print("WARNING: No GPU detected. Training on CPU will be extremely slow.")
 
     # Model
     model = KnittingTransformer(
