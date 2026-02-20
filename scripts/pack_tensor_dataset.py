@@ -78,15 +78,27 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Find all sample IDs
-    files = sorted([
-        f[:-5] for f in os.listdir(args.input_dir)
-        if f.endswith(".json") and f.startswith("sample_")
-    ])
+    # FUSE workaround: os.listdir often silently truncates on Google Drive if >10k files.
+    # We use os.scandir which is an iterator and less prone to memory timeouts.
+    files = []
+    try:
+        print(f"Scanning directory {args.input_dir} (this may take a minute on Google Drive)...")
+        for entry in os.scandir(args.input_dir):
+            if entry.name.endswith(".json") and entry.name.startswith("sample_"):
+                files.append(entry.name[:-5])
+    except OSError as e:
+        print(f"Error scanning directory: {e}")
+        return
+        
+    files = sorted(files)
 
     if not files:
         print(f"No samples found in {args.input_dir}")
         return
+        
+    if len(files) < 50000:
+        print(f"WARNING: Only found {len(files)} files. Google Drive FUSE might be truncating the list.")
+        print("To fix this, we recommend running this script directly on the raw files before moving them to Drive, or using a cloud bucket.")
 
     print(f"Packing {len(files)} samples into shards...")
 
