@@ -515,4 +515,23 @@ def train(
 
 
 if __name__ == "__main__":
-    train()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--dataset_dir", type=str, default="data/processed/dataset")
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument("--run_name", type=str, default="phase9b_dev")
+    parser.add_argument("--resume_checkpoint", type=str, default="")
+    args = parser.parse_args()
+    
+    train(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        dataset_dir=args.dataset_dir,
+        checkpoint_dir=args.checkpoint_dir,
+        run_name=args.run_name,
+        resume_checkpoint=args.resume_checkpoint
+    )
