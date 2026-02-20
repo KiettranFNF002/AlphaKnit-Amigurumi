@@ -496,7 +496,7 @@ def train(
 
         # Console log
         cr_str = f" | compile={compile_rate*100:.1f}%" if compile_rate is not None else ""
-        print(f"Epoch {epoch:3d}/{epochs} | train={train_loss:.4f} (ty={train_metrics['l_type']:.2f}, ed={train_metrics['l_edge']:.2f}) | val={val_loss:.4f}{cr_str}")
+        print(f"Epoch {epoch:3d}/{epochs} | train={train_metrics['loss']:.4f} (ty={train_metrics['l_type']:.2f}, ed={train_metrics['l_edge']:.2f}) | val={val_loss:.4f}{cr_str}")
 
         # Save best checkpoint
         if val_loss < best_val_loss:
