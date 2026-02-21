@@ -359,10 +359,18 @@ def train_epoch(
         pib_val = 0.0
         mi_leak = 0.0
         if probe_pool and np.random.random() > measurement_dropout:
-            # Collect training grads for PIB
+            # Identify last layer dynamically
+            last_layer_prefix = None
+            for name, _ in model.named_parameters():
+                 if "transformer.layers" in name:
+                     parts = name.split(".")
+                     idx = int(parts[2])
+                     if last_layer_prefix is None or idx > int(last_layer_prefix.split(".")[-1]):
+                         last_layer_prefix = f"transformer.layers.{idx}"
+
             train_grads = {}
             for name, p in model.named_parameters():
-                if "transformer.layers.-1" in name and p.grad is not None:
+                if last_layer_prefix and name.startswith(last_layer_prefix) and p.grad is not None:
                     train_grads[name] = p.grad.detach().clone()
             
             pib_val = probe_pool.compute_pib(model, train_grads, criterion, device)
@@ -392,7 +400,18 @@ def train_epoch(
         total_pib += pib_val
         sharpness_tracker = getattr(train_epoch, "sharpness_tracker")
         if sharpness_tracker:
-            sharpness_grad_norm = torch.norm(torch.cat([p.grad.detach().flatten() for p in model.parameters() if p.grad is not None and "transformer.layers.-1" in name or "transformer.layers.11" in name])).item()
+            # Find last layer for sharpness tracking
+            last_layer_prefix = None
+            for name, _ in model.named_parameters():
+                 if "transformer.layers" in name:
+                     parts = name.split(".")
+                     idx = int(parts[2])
+                     if last_layer_prefix is None or idx > int(last_layer_prefix.split(".")[-1]):
+                         last_layer_prefix = f"transformer.layers.{idx}"
+
+            relevant_grads = [p.grad.detach().flatten() for name, p in model.named_parameters() 
+                              if p.grad is not None and last_layer_prefix and name.startswith(last_layer_prefix)]
+            sharpness_grad_norm = torch.norm(torch.cat(relevant_grads)).item() if relevant_grads else 0.0
             total_sharpness += sharpness_tracker.update(sharpness_grad_norm)
 
         n_batches += 1

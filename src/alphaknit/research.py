@@ -7,18 +7,30 @@ import os
 def compute_phase_lag(model, optimizer, eps=1e-8):
     """
     v6.6-F: True Adam Update Direction Phase Lag.
-    Cosine similarity between gradient direction and actual Adam update vector:
-    update = m_hat / (sqrt(v_hat) + eps)
+    Cosine similarity between gradient direction and actual Adam update vector.
+    Grounds energy in proper learning rate scales.
     """
     cosines = []
     update_energies = []
     
-    # Target late layers for topological orientation
-    target_keywords = ["transformer.layers.-1", "lm_head", "output_proj", "final_norm"]
+    # Identify last layer name dynamically (no more "-1")
+    last_layer_prefix = None
+    for name, _ in model.named_parameters():
+         if "transformer.layers" in name:
+             parts = name.split(".")
+             idx = int(parts[2])
+             if last_layer_prefix is None or idx > int(last_layer_prefix.split(".")[-1]):
+                 last_layer_prefix = f"transformer.layers.{idx}"
+    
+    target_keywords = ["lm_head", "output_proj", "final_norm"]
+    if last_layer_prefix:
+        target_keywords.append(last_layer_prefix)
     
     beta1, beta2 = 0.9, 0.999
+    lr = 1e-3
     for group in optimizer.param_groups:
         beta1, beta2 = group.get('betas', (0.9, 0.999))
+        lr = group.get('lr', 1e-3)
         break
 
     for name, p in model.named_parameters():
@@ -43,8 +55,8 @@ def compute_phase_lag(model, optimizer, eps=1e-8):
         m_hat = m / (1 - beta1 ** step)
         v_hat = v / (1 - beta2 ** step)
         
-        # Actual Update Direction (Normalized by second moment)
-        update_dir = m_hat / (torch.sqrt(v_hat) + eps)
+        # Actual Update Direction (Grounded with LR and normalized by second moment)
+        update_dir = -lr * m_hat / (torch.sqrt(v_hat) + eps)
         
         if grad.numel() == 0 or update_dir.numel() == 0:
             continue
@@ -71,14 +83,14 @@ class HiddenProbePool:
         self.active_idx = 0
         self.rotation_count = 0
         
-        # Partition probe_loader into distinct pools
+        # Partition probe_loader into distinct pools using array_split to handle uneven sizes
         all_batches = list(probe_loader)
-        if len(all_batches) < num_pools:
-            self.pools = [all_batches]
-        else:
-            size = len(all_batches) // num_pools
-            for i in range(num_pools):
-                self.pools.append(all_batches[i*size : (i+1)*size])
+        if not all_batches:
+            self.pools = [[]]
+            return
+            
+        splits = np.array_split(all_batches, num_pools)
+        self.pools = [list(s) for s in splits]
         
     def get_batch(self):
         pool = self.pools[self.active_idx]
@@ -89,28 +101,44 @@ class HiddenProbePool:
         self.rotation_count += 1
         print(f"🔄 DECOUPLING: Probe Pool rotated to idx {self.active_idx}")
 
-    def compute_pib(self, model, train_grads_dict, criterion, device):
-        """
-        Probe Influence Bound (PIB): cos(grad_train, grad_probe)
-        Ensures measurement doesn't steer learning.
-        """
+        if not pool: return 0.0
+        
         batch = self.get_batch()
-        inputs = batch['points'].to(device)
+        inputs = batch['point_cloud'].to(device)
         targets = batch['type_labels'].to(device)
         
-        # Compute probe gradient without affecting optimizer state
-        model.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs['logits_type'].view(-1, outputs['logits_type'].size(-1)), targets.view(-1))
-        loss.backward()
+        # v6.6-F Grounding: Causal Isolation (RNG + RNG stats)
+        # Using model.eval() and random.fork_rng to prevent instrumentation interference
+        model.eval() 
+        with torch.random.fork_rng():
+            torch.manual_seed(42) # Consistent sampling for probe reliability
+            model.zero_grad()
+            outputs = model(inputs, batch.get('src_tokens', None).to(device) if 'src_tokens' in batch else None)
+            # Reconstruct logits view safely
+            logits = outputs[0] if isinstance(outputs, tuple) else outputs
+            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss.backward()
         
         cos_sims = []
+        # Find last layer name dynamically
+        last_layer_prefix = None
+        for name, _ in model.named_parameters():
+             if "transformer.layers" in name:
+                 parts = name.split(".")
+                 # Assuming name is like transformer.layers.11.norm1.weight
+                 idx = int(parts[2])
+                 if last_layer_prefix is None or idx > int(last_layer_prefix.split(".")[-1]):
+                     last_layer_prefix = f"transformer.layers.{idx}"
+
         for name, p in model.named_parameters():
-            if "transformer.layers.-1" in name and p.grad is not None and name in train_grads_dict:
+            if last_layer_prefix and name.startswith(last_layer_prefix) and p.grad is not None and name in train_grads_dict:
                 g_p = p.grad.detach().flatten()
                 g_t = train_grads_dict[name].detach().flatten()
-                sim = F.cosine_similarity(g_p.unsqueeze(0), g_t.unsqueeze(0))
+                sim = torch.nn.functional.cosine_similarity(g_p.unsqueeze(0), g_t.unsqueeze(0))
                 cos_sims.append(sim.item())
+        
+        model.zero_grad() 
+        model.train() # Restore state
         
         model.zero_grad() # Clean up immediately
         
@@ -140,11 +168,11 @@ class LatentPhasePortrait:
         h = hidden_states.detach()
         mask = structural_mask.unsqueeze(-1).float()
         
-        # Mean pooling only over structural tokens across entire batch
-        sum_hidden = (h * mask).sum(dim=(0, 1))
-        denom = mask.sum() + 1e-6
-        
-        pooled = sum_hidden / denom # [D]
+        # Grounding: Mean-of-means pooling to remove batch size bias
+        # 1. Mean over structural tokens per sample
+        per_sample = (h * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-6) # [B, D]
+        # 2. Mean over batch
+        pooled = per_sample.mean(dim=0) # [D]
         self.history.append(pooled.cpu().float().numpy())
 
     def get_history(self):
@@ -168,10 +196,18 @@ class ModelRealityAnchors:
         """
         current_latents: [D] (from LatentPhasePortrait)
         """
-        # 1. Normalized Weight Curvature: ||W_t - W_{t-1}|| / ||W_{t-1}||
+        # 1. Normalized Weight Curvature
+        last_layer_prefix = None
+        for name, _ in model.named_parameters():
+             if "transformer.layers" in name:
+                 parts = name.split(".")
+                 idx = int(parts[2])
+                 if last_layer_prefix is None or idx > int(last_layer_prefix.split(".")[-1]):
+                     last_layer_prefix = f"transformer.layers.{idx}"
+
         curvatures = []
         for name, p in model.named_parameters():
-            if "transformer.layers.-1" in name: 
+            if last_layer_prefix and name.startswith(last_layer_prefix): 
                 w = p.detach().cpu()
                 if name in self.prev_weights:
                     diff = torch.norm(w - self.prev_weights[name])
@@ -191,16 +227,12 @@ class ModelRealityAnchors:
         
         self.prev_latents = current_latents
 
-    @torch.no_grad()
-    def compute_rank(self, latents_batch):
-        """
-        Spectral Rank: exp(Entropy(SingularValues))
-        latents_batch: [B, D]
-        """
+        # Spectral Rank: exp(Entropy(SingularValues))
         if latents_batch.size(0) < 2: return 0.0
         
         centered = latents_batch - latents_batch.mean(dim=0)
-        _, S, _ = torch.svd(centered)
+        # v6.6-F Grounding: Use fast and stable linalg.svdvals
+        S = torch.linalg.svdvals(centered)
         
         probs = S / (S.sum() + 1e-8)
         entropy = -torch.sum(probs * torch.log(probs + 1e-8))
@@ -234,17 +266,21 @@ class EmergenceTracker:
         self.peak_epoch = None
         self.window_size = window_size
 
-    def update(self, score, epoch):
+    def update(self, score, epoch, threshold=0.01):
         self.history.append(score)
-        if len(self.history) < 2:
+        if len(self.history) < 3: # Need at least 3 for acceleration
             return False
 
         vel = self.history[-1] - self.history[-2]
+        prev_vel = self.history[-2] - self.history[-3]
+        accel = vel - prev_vel
         
-        if vel > self.best_velocity:
-            self.best_velocity = vel
-            self.peak_epoch = epoch
-            print(f"📈 NEW EMERGENCE PEAK: Velocity {vel:.4f} at Epoch {epoch}")
+        # v6.6-F Grounding: Emergence requires crossing noise floor AND positive acceleration (crystallization)
+        if vel > threshold and accel > 0:
+            if self.peak_epoch is None or vel > self.best_velocity:
+                self.best_velocity = vel
+                self.peak_epoch = epoch
+                print(f"📈 NEW EMERGENCE PEAK: Velocity {vel:.4f}, Accel {accel:.4f} at Epoch {epoch}")
 
         if self.peak_epoch is not None:
             age = epoch - self.peak_epoch
