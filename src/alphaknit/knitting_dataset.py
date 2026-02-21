@@ -142,6 +142,7 @@ def make_dataloaders(dataset_dir: str, val_split: float = 0.1,
             val_pattern = val_files
 
         def decode_and_extract(sample):
+            import io
             # sample['pt'] is raw bytes from the tar archive
             pt_bytes = sample["pt"]
             # Decode bytes into the PyTorch dict we originally saved
