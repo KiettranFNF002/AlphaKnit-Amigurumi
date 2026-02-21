@@ -36,6 +36,7 @@ def train_epoch(
     parent_noise_prob: float = 0.0, # Phase 9B Stage 1 Noise
     grad_accum_steps: int = 1,
     prev_epoch_probs: dict = None, # Phase 10: Store previous probabilities for PDI
+    epoch: int = 0,                # Current epoch info for Topology Tension curriculum
 ) -> dict:
     """Run one training epoch. Returns dict of average losses."""
     model.train()
@@ -662,7 +663,7 @@ def train(
         train_metrics = train_epoch(model, train_loader, optimizer, criterion, criterion_p, device, 
                                     edge_weight=edge_weight, sector_weight=sector_weight, 
                                     parent_noise_prob=parent_noise_prob, grad_accum_steps=grad_accum_steps,
-                                    prev_epoch_probs=prev_epoch_probs)
+                                    prev_epoch_probs=prev_epoch_probs, epoch=epoch)
                                     
         # Calculate PDI (Parent Decision Instability)
         pdi = 0.0
