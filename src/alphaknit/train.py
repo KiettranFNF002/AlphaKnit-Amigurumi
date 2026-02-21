@@ -372,7 +372,7 @@ def train(
     early_stop_patience: int = 10,    # Phase 8: stop if no improvement
     log_compile_every: int = 5,       # Phase 8: compile rate every N epochs
     resume_checkpoint: str = None,    # Phase 8: resume from checkpoint
-    num_workers: int = 4,             # Phase 10: dataloader multiprocessing
+    num_workers: int = 2,             # Phase 10: dataloader multiprocessing
     grad_accum_steps: int = 4,        # Phase 10: gradient accumulation for T4 VRAM
 ):
     """Full training loop with checkpointing."""
@@ -587,7 +587,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--run_name", type=str, default="phase9b_dev")
     parser.add_argument("--resume_checkpoint", type=str, default="")
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--grad_accum_steps", type=int, default=4)
     args = parser.parse_args()
     
