@@ -366,6 +366,7 @@ def train(
     early_stop_patience: int = 10,    # Phase 8: stop if no improvement
     log_compile_every: int = 5,       # Phase 8: compile rate every N epochs
     resume_checkpoint: str = None,    # Phase 8: resume from checkpoint
+    num_workers: int = 2,             # Phase 10: dataloader multiprocessing
 ):
     """Full training loop with checkpointing."""
 
@@ -378,7 +379,7 @@ def train(
 
     # Data
     train_loader, val_loader = make_dataloaders(
-        dataset_dir, val_split=val_split, batch_size=batch_size
+        dataset_dir, val_split=val_split, batch_size=batch_size, num_workers=num_workers
     )
     
     try:
@@ -572,12 +573,13 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--dataset_dir", type=str, default="data/processed/dataset")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--run_name", type=str, default="phase9b_dev")
     parser.add_argument("--resume_checkpoint", type=str, default="")
+    parser.add_argument("--num_workers", type=int, default=2)
     args = parser.parse_args()
     
     train(
@@ -587,5 +589,6 @@ if __name__ == "__main__":
         dataset_dir=args.dataset_dir,
         checkpoint_dir=args.checkpoint_dir,
         run_name=args.run_name,
-        resume_checkpoint=args.resume_checkpoint
+        resume_checkpoint=args.resume_checkpoint,
+        num_workers=args.num_workers
     )
