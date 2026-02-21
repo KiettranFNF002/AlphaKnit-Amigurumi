@@ -25,9 +25,10 @@ from . import config
 from .model import KnittingTransformer
 from .knitting_dataset import make_dataloaders
 
-# AlphaKnit v6.0/6.1 Watchtower Imports
-from alphaknit.research import compute_phase_lag, LatentPhasePortrait, EmergenceTracker
-from alphaknit.metrics import topology_tension_field, compute_structural_metrics
+# AlphaKnit v6.6-F: The Blind Discovery Engine
+from alphaknit.research import compute_phase_lag, LatentPhasePortrait, EmergenceTracker, HiddenProbePool, ModelRealityAnchors
+from alphaknit.metrics import topology_tension_field, compute_structural_metrics, FunctionalSharpness
+from alphaknit.scientific import HypothesisEngine, InterventionEngine, NullEmergenceSuite
 
 
 #  Training helper                                                     #
@@ -161,33 +162,45 @@ def train_epoch(
     tension_weight: float = 0.02,  # v4.0: Dynamic tension ramp weight
     lambda_ttf: float = 0.001,     # v6.0: Topology Tension Field (Passive Bias)
     portrait: LatentPhasePortrait = None, # v6.0: To capture latent snapshots
+    intervention_engine: InterventionEngine = None, # v6.6-F: Causal Falsification
+    null_suite: NullEmergenceSuite = None, # v6.6-F: Scientific Control
+    probe_pool: HiddenProbePool = None, # v6.6-F: Observer Decoupling
+    measurement_dropout: float = 0.3, # v6.6-F: Prevent observer resonance
 ) -> dict:
     """Run one training epoch. Returns dict of average losses."""
     model.train()
     
     # Initialize static tracking if not present (v6.0 Robustness)
-    if not hasattr(train_epoch, "total_entropy"): train_epoch.total_entropy = 0.0
-    if not hasattr(train_epoch, "total_tension"): train_epoch.total_tension = 0.0
-    if not hasattr(train_epoch, "epoch_prob_p1_acc"): train_epoch.epoch_prob_p1_acc = torch.zeros(200, device=device)
-    if not hasattr(train_epoch, "epoch_prob_p2_acc"): train_epoch.epoch_prob_p2_acc = torch.zeros(200, device=device)
-    if not hasattr(train_epoch, "epoch_valid_batches"): train_epoch.epoch_valid_batches = 0
-    if not hasattr(train_epoch, "epoch_argmax_p1_hist"): 
-        train_epoch.epoch_argmax_p1_hist = torch.zeros(200, device=device)
+    if not hasattr(train_epoch, "total_entropy"): setattr(train_epoch, "total_entropy", 0.0)
+    if not hasattr(train_epoch, "total_tension"): setattr(train_epoch, "total_tension", 0.0)
+    if not hasattr(train_epoch, "epoch_prob_p1_acc"): setattr(train_epoch, "epoch_prob_p1_acc", torch.zeros(200, device=device))
+    if not hasattr(train_epoch, "epoch_prob_p2_acc"): setattr(train_epoch, "epoch_prob_p2_acc", torch.zeros(200, device=device))
+    if not hasattr(train_epoch, "epoch_valid_batches"): setattr(train_epoch, "epoch_valid_batches", 0)
     if not hasattr(train_epoch, "epoch_argmax_p2_hist"): 
-        train_epoch.epoch_argmax_p2_hist = torch.zeros(200, device=device)
+        setattr(train_epoch, "epoch_argmax_p2_hist", torch.zeros(200, device=device))
+    
+    # v6.6-F: Sharpness Tracking
+    if not hasattr(train_epoch, "sharpness_tracker") or getattr(train_epoch, "sharpness_tracker") is None:
+        setattr(train_epoch, "sharpness_tracker", FunctionalSharpness())
 
     total_loss = 0.0
     total_l_type = 0.0
     total_l_parent = 0.0
     total_l_deg = 0.0
     total_l_dist = 0.0
+    total_pib = 0.0
+    total_sharpness = 0.0
     
     n_batches = 0
 
-    for point_cloud, src_tokens, tgt_tokens in tqdm(loader, desc=f"Epoch {epoch}", leave=False):
-        point_cloud = point_cloud.to(device)   # (B, N, 3)
-        src_tokens  = src_tokens.to(device)    # (B, T, 3)
-        tgt_tokens  = tgt_tokens.to(device)    # (B, T, 3)
+    for batch_idx, batch in enumerate(tqdm(loader, desc=f"Epoch {epoch}", leave=False)):
+        # v6.6-F: Null Emergence Suite (Placebo Control)
+        if null_suite:
+            batch = null_suite.transform_batch(batch)
+            
+        point_cloud = batch['point_cloud'].to(device) # (B, N, 3) 
+        src_tokens  = batch['src_tokens'].to(device)  # (B, T, 3)
+        tgt_tokens  = batch['tgt_tokens'].to(device)  # (B, T, 3)
 
         # Apply Parent Noise
         if parent_noise_prob > 0.0:
@@ -208,6 +221,10 @@ def train_epoch(
             drop_mask = drop_mask ^ consecutive 
             src_tokens[:, :, 1] = torch.where(drop_mask, torch.zeros_like(src_tokens[:, :, 1]), src_tokens[:, :, 1])
             src_tokens[:, :, 2] = torch.where(drop_mask, torch.zeros_like(src_tokens[:, :, 2]), src_tokens[:, :, 2])
+
+        # v6.6-F: Causal Intervention
+        if intervention_engine:
+            intervention_engine.apply(n_batches)
 
         pad_mask = (src_tokens[:, :, 0] == config.PAD_ID)
         optimizer.zero_grad()
@@ -339,6 +356,23 @@ def train_epoch(
         if portrait is not None and hasattr(model, 'last_hidden_state'):
             portrait.capture(model.last_hidden_state.detach(), structural_mask)
 
+        # v6.6-F: Measurement Dropout & PIB
+        pib_val = 0.0
+        mi_leak = 0.0
+        if probe_pool and np.random.random() > measurement_dropout:
+            # Collect training grads for PIB
+            train_grads = {}
+            for name, p in model.named_parameters():
+                if "transformer.layers.-1" in name and p.grad is not None:
+                    train_grads[name] = p.grad.detach().clone()
+            
+            pib_val = probe_pool.compute_pib(model, train_grads, criterion, device)
+            
+            # Simplified MI Leak (if labels available in batch)
+            if hasattr(model, 'last_hidden_state') and 'type_labels' in point_cloud: # point_cloud here is the sample
+                # This needs more care, but for now we log PIB
+                pass
+
         # Optimization Step
         loss = loss_val / grad_accum_steps
         loss.backward()
@@ -354,6 +388,14 @@ def train_epoch(
         total_l_dist += loss_dist.item() if isinstance(loss_dist, torch.Tensor) else loss_dist
         train_epoch.total_entropy += entropy_val.item()
         train_epoch.total_tension += loss_tension.item() if isinstance(loss_tension, torch.Tensor) else loss_tension
+        
+        # v6.6-F: Scientific Metric Accumulation
+        total_pib += pib_val
+        sharpness_tracker = getattr(train_epoch, "sharpness_tracker")
+        if sharpness_tracker:
+            sharpness_grad_norm = torch.norm(torch.cat([p.grad.detach().flatten() for p in model.parameters() if p.grad is not None and "transformer.layers.-1" in name or "transformer.layers.11" in name])).item()
+            total_sharpness += sharpness_tracker.update(sharpness_grad_norm)
+
         n_batches += 1
 
     ret = {
@@ -373,6 +415,8 @@ def train_epoch(
         "struct_margin": struct_metrics.get("struct_margin", 0.0),
         "struct_top1_acc": struct_metrics.get("struct_top1_acc", 0.0),
         "struct_entropy": struct_metrics.get("struct_entropy", 0.0),
+        "pib": total_pib / max(n_batches, 1),
+        "sharpness": total_sharpness / max(n_batches, 1),
     }
     
     # Reset tracking variables for next epoch
@@ -633,9 +677,30 @@ def train(
     phase2_active = False
     phase2_start_epoch = 0
     
-    # v6.0: Observer Initialization
+    # v6.0/6.6-F: Observer & Discovery Initialization
     portrait = LatentPhasePortrait()
     emergence_tracker = EmergenceTracker()
+    anchors = ModelRealityAnchors()
+    hypotheses = HypothesisEngine()
+    intervention_engine = InterventionEngine(model)
+    null_suite = NullEmergenceSuite(mode=os.environ.get("AK_NULL_MODE", "real"))
+    
+    # Null Mode setup
+    if null_suite.mode != "real":
+        print(f"🧪 SCIENTIFIC CONTROL ACTIVE: Mode={null_suite.mode}")
+        null_suite.apply_geometry_null(model)
+
+    # Hidden Probe setup
+    probe_pool = None
+    if val_loader:
+        probe_pool = HiddenProbePool(val_loader, num_pools=3)
+        print(f"🔒 OBSERVER DECOUPLING: HiddenProbePool initialized with 3 pools.")
+
+    # Hypothesis Definitions (Proposals)
+    hypotheses.propose("Rank_Collapse", "L4 Rank drops preceded by Alignment spike", 
+                       lambda m: m.get("rank", 0) < 10 and m.get("phase_lag", 0) > 0.8)
+    hypotheses.propose("Functional_Crystallization", "Sharpness stability despite high Curvature",
+                       lambda m: m.get("sharpness", 0) < 1.05 and m.get("l_edge", 0) > 0.05)
     
     # v5.0: Auto-Resume logic
     if resume_auto:
@@ -726,12 +791,40 @@ def train(
             model, train_loader, optimizer, criterion, criterion_p, device, 
             edge_weight=edge_weight, parent_noise_prob=parent_noise_prob, 
             grad_accum_steps=grad_accum_steps, prev_epoch_probs=prev_epoch_probs, 
-            epoch=epoch, tension_weight=tension_weight, portrait=portrait
+            epoch=epoch, tension_weight=tension_weight, portrait=portrait,
+            intervention_engine=intervention_engine, null_suite=null_suite,
+            probe_pool=probe_pool, measurement_dropout=0.3
         )
+
+        # Update Anchors (v6.6-F)
+        anchors.update(model, portrait.history[-1] if portrait.history else None)
+        if hasattr(model, 'last_hidden_state'):
+            # Sample rank from a batch of latents
+            train_metrics["rank"] = anchors.compute_rank(model.last_hidden_state.detach().mean(dim=1))
         
-        # v6.1: Compute Phase Lag (Adam Bias Corrected)
-        phase_lag = compute_phase_lag(model, optimizer)
+        # v6.1/6.6-F: Compute Phase Lag and Update Discovery Engine
+        phase_lag, update_energy = compute_phase_lag(model, optimizer)
         train_metrics["phase_lag"] = phase_lag
+        train_metrics["update_energy"] = update_energy
+
+        # Hypothesis Falsification Check
+        hypo_reports = hypotheses.update(train_metrics, epoch)
+        
+        # v6.6-F: Failure Monitor (Automated Rejection by Scientific Control)
+        # If we are in 'real' mode, we compare against a virtual or previous null baseline
+        # Simplified: look for 'null_metrics.json' or use a conservative random baseline
+        null_metrics = {"struct_acc": 0.05} # Default placebo baseline
+        null_path = os.path.join(checkpoint_dir, "null_metrics_baseline.json")
+        if os.path.exists(null_path):
+            try:
+                with open(null_path) as f: null_metrics = json.load(f)
+            except Exception: pass
+            
+        hypotheses.monitor_failure(train_metrics, null_metrics)
+
+        for rep in hypo_reports:
+            if "VERIFIED" in rep: print(f"✅ DISCOVERY: {rep}")
+            if "REJECTED" in rep: print(f"⚠️ SCIENTIFIC REJECTION: {rep}")
                                     
         # Calculate PDI
         if prev_epoch_probs is not None:
@@ -797,6 +890,9 @@ def train(
             "val_loss": round(val_loss, 4),
             "phase_lag": round(train_metrics.get("phase_lag", 0.0), 4),
             "struct_acc": round(train_metrics.get("struct_top1_acc", 0.0), 4),
+            "pib": round(train_metrics.get("pib", 0.0), 4),
+            "sharpness": round(train_metrics.get("sharpness", 0.0), 4),
+            "causal_confidence": hypotheses.get_survival_map(),
             "latent_vector": portrait.history[-1].tolist() if portrait.history else None,
         }
         if compile_rate is not None: row["compile_success_rate"] = round(compile_rate, 4)
@@ -848,6 +944,10 @@ if __name__ == "__main__":
     parser.add_argument("--reset_optimizer", action="store_true")
     parser.add_argument("--resume_auto", action="store_true")
     parser.add_argument("--force_phase2", action="store_true")
+    parser.add_argument("--null_mode", type=str, default="real", choices=["real", "random_labels", "noise_inputs", "geometry_null"])
     args = parser.parse_args()
     
+    if args.null_mode != "real":
+        os.environ["AK_NULL_MODE"] = args.null_mode
+
     train(epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, dataset_dir=args.dataset_dir, checkpoint_dir=args.checkpoint_dir, run_name=args.run_name, resume_checkpoint=args.resume_checkpoint, num_workers=args.num_workers, grad_accum_steps=args.grad_accum_steps, reset_optimizer=args.reset_optimizer, resume_auto=args.resume_auto, force_phase2=args.force_phase2)
