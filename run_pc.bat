@@ -1,30 +1,36 @@
 @echo off
-<<<<<<< HEAD
 setlocal enabledelayedexpansion
-echo ==============================================
-echo  AlphaKnit-Topology v5.0 NASA-Style Launcher
-echo ==============================================
+echo ==================================================
+echo  AlphaKnit-Topology v6.6-F "NASA-Style" Launcher
+echo ==================================================
 
-:: Environment Setup
+:: 1. Environment Check/Setup
 if not exist venv (
     echo [SETUP] Creating Virtual Environment...
     python -m venv venv
     call venv\Scripts\activate.bat
     python -m pip install --upgrade pip
-    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    python -m pip install tqdm networkx matplotlib webdataset
+    python -m pip install -r requirements_pc.txt
 ) else (
     call venv\Scripts\activate.bat
 )
 
 set PYTHONPATH=src
 set CUDA_LAUNCH_BLOCKING=0
-set PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
-:: v5.0 NASA-Style Launch Sequence
-:: Automatically detects the current state and picks the right phase.
+:: 2. Dataset Check/Generation
+echo.
+echo [DATA] Checking dataset...
+if not exist "data\processed\dataset\*.tar" (
+    echo Dataset shards not found. Starting local generation...
+    python scripts\gen_shards_direct.py --output_dir data\processed\dataset --n_samples 50000 --shard_size 1000
+) else (
+    echo Dataset shards found. Skipping generation.
+)
 
-echo Detecting latest training state...
+:: 3. Automated Phase Detection
+echo.
+echo [CONFIG] Detecting latest training state...
 set LAST_EPOCH=-1
 if not exist scripts\get_last_epoch.py (
     echo [ERROR] scripts\get_last_epoch.py missing!
@@ -40,104 +46,61 @@ echo  LATEST STATE: Epoch %LAST_EPOCH%
 echo ==============================================
 
 if %LAST_EPOCH% LSS 0 (
-    echo [LAUNCH] No previous state found. Starting PHASE 1.
+    echo [LAUNCH] No previous state. Starting PHASE 1: Grammar Warmup.
     goto PHASE_1
 )
 if %LAST_EPOCH% LSS 11 (
-    echo [RESUME] Phase 1 Grammar Warmup incomplete. Resuming Phase 1.
+    echo [RESUME] Phase 1 incomplete. Resuming Grammar Warmup.
     goto PHASE_1
 )
 if %LAST_EPOCH% LSS 22 (
-    echo [TRANSITION] Grammar master found. Entering/Resuming PHASE 2 AIRLOCK.
+    echo [TRANSITION] Grammar master found. Entering/Resuming PHASE 2: Airlock.
     goto PHASE_2
 )
-echo [MASTERY] Physics ignition confirmed. Resuming PHASE 3 TOPOLOGY.
+echo [MASTERY] Physics ignition confirmed. Resuming PHASE 3: Topology Discovery.
 goto PHASE_3
 
 
 :PHASE_1
 echo --- PHASE 1: Grammar Warmup (Epoch 1-11) ---
-echo BS 64, Acc 2 (Eff BS 128) | Goal: Entropy Stability
-python -m alphaknit.train --batch_size 64 --grad_accum_steps 2 --num_workers 4 --epochs 11 --lr 3e-4 --resume_auto --dataset_dir "data/processed/dataset/shard-{0000..0049}.tar"
+echo Target: Entropy Stability | BS 128 (64x2)
+python src/alphaknit/train.py --batch_size 64 --grad_accum_steps 2 --num_workers 4 --epochs 11 --lr 3e-4 --resume_auto --run_name "v6.6F_Grammar"
 if %ERRORLEVEL% NEQ 0 goto ERROR
 goto RESTART_SEQUENCE
 
 :PHASE_2
 echo.
 echo --- PHASE 2: Airlock Transition (Epoch 12-22) ---
-echo BS 36, Acc 1 | Selective Reset | Goal: Physics Emergence
-python -m alphaknit.train --batch_size 36 --grad_accum_steps 1 --num_workers 4 --epochs 22 --lr 1.5e-4 --reset_optimizer --resume_auto --dataset_dir "data/processed/dataset/shard-{0000..0049}.tar"
+echo Target: Physics Emergence | Selective Reset | SHOCK LR
+python src/alphaknit/train.py --batch_size 48 --grad_accum_steps 2 --num_workers 4 --epochs 22 --lr 1.5e-4 --reset_optimizer --resume_auto --run_name "v6.6F_Emergence"
 if %ERRORLEVEL% NEQ 0 goto ERROR
 goto RESTART_SEQUENCE
 
 :PHASE_3
 echo.
 echo --- PHASE 3: Topology Mastery (Epoch 23-100) ---
-echo BS 30, Acc 1 | Goal: Structural Complexity
-python -m alphaknit.train --batch_size 30 --grad_accum_steps 1 --num_workers 4 --epochs 100 --lr 2e-4 --resume_auto --dataset_dir "data/processed/dataset/shard-{0000..0049}.tar"
+echo Target: Structural Falsification | BS 32 (Acc 4)
+python src/alphaknit/train.py --batch_size 32 --grad_accum_steps 4 --num_workers 4 --epochs 100 --lr 1e-4 --resume_auto --run_name "v6.6F_Mastery"
 if %ERRORLEVEL% NEQ 0 goto ERROR
 goto END
 
+
 :RESTART_SEQUENCE
 echo.
-echo Phase finished. Restarting sequence to detect next phase...
+echo Phase completed. Re-detecting next sequence...
 timeout /t 5
-:: For Windows batch, we use call or just rerun the script
 %0
 goto :EOF
 
 :ERROR
 echo.
-echo [FATAL] Training process interrupted or crashed.
+echo [FATAL] Training process crashed or interrupted.
 pause
 exit /b 1
 
 :END
 echo.
 echo ==============================================
-echo  ALPHA-KNIT TRAINING COMPLETE! 🚀
+echo  ALPHA-KNIT v6.6-F DISCOVERY COMPLETE! 🚀
 echo ==============================================
-=======
-setlocal
-echo ==============================================
-echo  AlphaKnit-Topology Local PC Training Launcher
-echo ==============================================
-
-if not exist venv (
-    echo [1/4] Creating virtual environment (venv)...
-    python -m venv venv
-) else (
-    echo [1/4] Virtual environment already exists.
-)
-
-echo [2/4] Activating virtual environment...
-call venv\Scripts\activate.bat
-
-echo [3/4] Installing/Updating required dependencies...
-pip install -r requirements_pc.txt
-
-echo.
-echo [4/4] Checking dataset...
-if not exist "data\processed\dataset\*.tar" (
-    echo Dataset shards not found in data\processed\dataset\
-    echo Starting local dataset generation ^(50,000 samples^)...
-    echo This might take a few minutes depending on CPU speed.
-    python scripts\gen_shards_direct.py --output_dir data\processed\dataset --n_samples 50000 --shard_size 1000
-) else (
-    echo Dataset shards found. Skipping generation.
-)
-
-echo.
-echo ==============================================
-echo  Starting AlphaKnit Training! 🚀
-echo  (Press Ctrl+C to stop training manually)
-echo ==============================================
-echo.
-
-:: You can increase batch_size to 256 or 512 if the PC has a high-end GPU (12GB+ VRAM)
-python src/alphaknit/train.py --batch_size 128 --grad_accum_steps 4 --num_workers 4
-
-echo.
-echo Training process finished or interrupted.
->>>>>>> 6715203057079fa13e1fd3855c710092996e127c
 pause

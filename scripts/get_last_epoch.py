@@ -1,24 +1,23 @@
 import os
 import re
 
-ckpt_dir = "checkpoints"
+def main():
+    checkpoint_dir = "checkpoints"
+    if not os.path.exists(checkpoint_dir):
+        print("-1")
+        return
 
-def get_last_epoch():
-    if not os.path.exists(ckpt_dir):
-        return -1
-        
+    files = os.listdir(checkpoint_dir)
     epochs = []
-    # Match both epoch_011.pt and checkpoint_xyz_epoch_011.pt
-    pattern = re.compile(r".*epoch_(\d+)\.pt")
+    for f in files:
+        match = re.search(r"epoch_(\d+)\.pt", f)
+        if match:
+            epochs.append(int(match.group(1)))
     
-    for f in os.listdir(ckpt_dir):
-        m = pattern.match(f)
-        if m:
-            epochs.append(int(m.group(1)))
-            
     if not epochs:
-        return -1
-    return max(epochs)
+        print("-1")
+    else:
+        print(max(epochs))
 
 if __name__ == "__main__":
-    print(get_last_epoch())
+    main()
