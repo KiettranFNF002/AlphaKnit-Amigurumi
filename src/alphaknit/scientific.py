@@ -1,54 +1,89 @@
 import torch
-import torch.nn as F
+import torch.nn.functional as F
 import numpy as np
 
 class InterventionEngine:
     """
     v6.6-F: Causal Intervention Engine.
     Injects noise or clips rank in specific layers to test causal hypotheses.
+    Uses PyTorch forward hooks for mechanical integration.
     """
     def __init__(self, model):
         self.model = model
-        self.active_interventions = {} # {layer_name: type}
+        self.active_interventions = {} # {layer_name: {"type": str, "remaining": int, "handle": handle}}
         self.random_baseline_prob = 0.15
 
     def register_intervention(self, layer_name, type="noise", duration=5):
-        self.active_interventions[layer_name] = {"type": type, "remaining": duration}
+        # Clean up existing hook if present
+        if layer_name in self.active_interventions:
+            self._remove_hook(layer_name)
+            
+        handle = self._attach_hook(layer_name, type)
+        self.active_interventions[layer_name] = {
+            "type": type, 
+            "remaining": duration,
+            "handle": handle
+        }
         print(f"🛠️ INTERVENTION: Registered {type} on {layer_name} for {duration} steps.")
 
-    def apply(self, step):
+    def _attach_hook(self, layer_name, intervention_type):
+        """Finds the module and registers a forward hook."""
+        target_module = None
+        for name, module in self.model.named_modules():
+            if name == layer_name:
+                target_module = module
+                break
+        
+        if target_module is None:
+            print(f"⚠️ INTERVENTION WARNING: Layer {layer_name} not found.")
+            return None
+            
+        return target_module.register_forward_hook(self.hook_fn)
+
+    def _remove_hook(self, layer_name):
+        """Removes the PyTorch hook handle."""
+        data = self.active_interventions.get(layer_name)
+        if data and data["handle"]:
+            data["handle"].remove()
+            print(f"🧹 INTERVENTION: Removed hook from {layer_name}")
+
+    def apply(self, current_step):
         """
-        Applies active interventions by attaching temporary hooks.
+        Manages life cycle of interventions.
         """
-        # Random Intervention Baseline (Scientific Control)
+        # 1. Random Intervention Baseline (Scientific Control)
         if np.random.random() < self.random_baseline_prob:
-            layer_names = [n for n, _ in self.model.named_modules() if "transformer.layers" in n]
+            # Gather candidate layers (Transformer layers are primary targets)
+            layer_names = [n for n, _ in self.model.named_modules() if "transformer.layers" in n and "." not in n.replace("transformer.layers", "")]
             if layer_names:
                 random_layer = np.random.choice(layer_names)
-                self.register_intervention(random_layer, "noise", duration=1)
+                if random_layer not in self.active_interventions:
+                    self.register_intervention(random_layer, "noise", duration=1)
 
-        # Decay durations and clean up
+        # 2. Decay durations and clean up expired hooks
         to_remove = []
         for name, data in self.active_interventions.items():
             data["remaining"] -= 1
             if data["remaining"] <= 0:
                 to_remove.append(name)
+        
         for name in to_remove:
+            self._remove_hook(name)
             self.active_interventions.pop(name, None)
 
     def hook_fn(self, module, input, output):
-        # We find the name of the module that called this
-        # In a real implementation, we'd use a more robust way to map module to name
-        # For AlphaKnit v6.6-F, we assume this is called on a layer that is active
-        # Simplified perturbation:
-        if isinstance(output, tuple):
-            h = output[0]
-            # Add Gaussian noise scaled by the output's standard deviation
-            noise = torch.randn_like(h) * (h.std() * 0.1)
-            return (h + noise, *output[1:])
-        else:
-            noise = torch.randn_like(output) * (output.std() * 0.1)
-            return output + noise
+        """The actual perturbation logic."""
+        # Note: In PyTorch hooks, 'output' is what the module just computed
+        with torch.no_grad():
+            if isinstance(output, tuple):
+                # Transformer layers often return (hidden_states, attention_weights)
+                h = output[0]
+                noise = torch.randn_like(h) * (h.std() + 1e-6) * 0.1
+                perturbed = h + noise
+                return (perturbed, *output[1:])
+            else:
+                noise = torch.randn_like(output) * (output.std() + 1e-6) * 0.1
+                return output + noise
 
 
 class HypothesisEngine:
@@ -137,7 +172,7 @@ class NullEmergenceSuite:
         
         if self.mode == "noise_inputs":
             # Structural Breakdown
-            batch['points'] = batch['points'] + torch.randn_like(batch['points']) * 0.5
+            batch['point_cloud'] = batch['point_cloud'] + torch.randn_like(batch['point_cloud']) * 0.5
             
         return batch
 
