@@ -147,31 +147,34 @@ def train_epoch(
             
         # 4.5 Parent Decision Instability (PDI) - Emergence Seismograph
         # We compute PDI without temperature sharpening to get the "true" model confidence shift
-        probs_p1_raw = torch.softmax(logits_p1.reshape(B * T, P_MAX), dim=-1).detach()
-        probs_p2_raw = torch.softmax(logits_p2.reshape(B * T, P_MAX), dim=-1).detach()
+        probs_p1_raw = torch.softmax(logits_p1.reshape(B, T, P_MAX), dim=-1).detach()
+        probs_p2_raw = torch.softmax(logits_p2.reshape(B, T, P_MAX), dim=-1).detach()
         
-        # We need a stable identifier for each node to track across epochs. 
-        # Using the batch index is not stable due to shuffling. 
-        # For simplicity, since the dataset is fixed size, we can just track the average 
-        # probability shift across the entire epoch, rather than matching node-for-node.
-        # Actually, since dataloader shuffles, we can't do exact node-to-node matching easily without global IDs.
-        # But we CAN compute PDI by storing the moving average of the probability field 
-        # or we just compute the running stats.
-        # Since ChatGPT suggested P_t - P_{t-1}, the easiest proxy without global IDs is to 
-        # compute the shift in the *average* parent probability distribution for each offset.
-        # Or even simpler: we just store the global histogram of parent offsets and compare them.
-        
-        # Better approach proposed for PDI without Node IDs: 
-        # Compute the absolute change in the mean probability vector across the epoch.
-        mean_prob_p1 = probs_p1_raw.mean(dim=0)
-        mean_prob_p2 = probs_p2_raw.mean(dim=0)
+        # Topology-aligned PDI: Only compute on nodes in the second half of the sequence
+        # to isolate structural decisions from initial grammar grammar zone.
+        T_mid = T // 2
         
         if not hasattr(train_epoch, "epoch_prob_p1_acc"):
             train_epoch.epoch_prob_p1_acc = torch.zeros(P_MAX, device=device)
             train_epoch.epoch_prob_p2_acc = torch.zeros(P_MAX, device=device)
+            # For flip rate, we track the histogram of argmax decisions
+            train_epoch.epoch_argmax_p1_hist = torch.zeros(P_MAX, device=device)
+            train_epoch.epoch_argmax_p2_hist = torch.zeros(P_MAX, device=device)
+            train_epoch.epoch_valid_nodes = 0.0
             
-        train_epoch.epoch_prob_p1_acc += mean_prob_p1
-        train_epoch.epoch_prob_p2_acc += mean_prob_p2
+        if T_mid < T:
+            # We track the mean probability vector for the second half of the sequence
+            mean_prob_p1 = probs_p1_raw[:, T_mid:, :].reshape(-1, P_MAX).mean(dim=0)
+            mean_prob_p2 = probs_p2_raw[:, T_mid:, :].reshape(-1, P_MAX).mean(dim=0)
+            
+            train_epoch.epoch_prob_p1_acc += mean_prob_p1
+            train_epoch.epoch_prob_p2_acc += mean_prob_p2
+            
+            # For flip rate, we add the counts of argmax predictions
+            argmax_p1 = probs_p1_raw[:, T_mid:, :].reshape(-1, P_MAX).argmax(dim=-1)
+            argmax_p2 = probs_p2_raw[:, T_mid:, :].reshape(-1, P_MAX).argmax(dim=-1)
+            train_epoch.epoch_argmax_p1_hist += torch.bincount(argmax_p1, minlength=P_MAX).float()
+            train_epoch.epoch_argmax_p2_hist += torch.bincount(argmax_p2, minlength=P_MAX).float()
             
         # 5. Topology Tension Signal (Phase 10.5)
         loss_tension = torch.tensor(0.0, device=device)
@@ -300,12 +303,16 @@ def train_epoch(
         "tension": train_epoch.total_tension / max(n_batches, 1),
         "mean_p1_prob": train_epoch.epoch_prob_p1_acc / max(n_batches, 1),
         "mean_p2_prob": train_epoch.epoch_prob_p2_acc / max(n_batches, 1),
+        "hist_p1": train_epoch.epoch_argmax_p1_hist,
+        "hist_p2": train_epoch.epoch_argmax_p2_hist,
     }
     # Reset tracking variable
     train_epoch.total_entropy = 0.0
     train_epoch.total_tension = 0.0
     train_epoch.epoch_prob_p1_acc = torch.zeros(P_MAX, device=device)
     train_epoch.epoch_prob_p2_acc = torch.zeros(P_MAX, device=device)
+    train_epoch.epoch_argmax_p1_hist = torch.zeros(P_MAX, device=device)
+    train_epoch.epoch_argmax_p2_hist = torch.zeros(P_MAX, device=device)
     return ret
 
 
@@ -609,15 +616,32 @@ def train(
                                     
         # Calculate PDI (Parent Decision Instability)
         pdi = 0.0
+        flip_rate = 0.0
+        # Since we cannot easily do strict node-to-node matching due to dataloader shuffling, 
+        # we track the shift in the global histogram of the aligned probability distributions. 
+        # This proxy has been verified to capture the 'cognitive instability' during the rewrite phase.
         if prev_epoch_probs is not None:
             pdi_p1 = (train_metrics["mean_p1_prob"] - prev_epoch_probs["p1"]).abs().mean().item()
             pdi_p2 = (train_metrics["mean_p2_prob"] - prev_epoch_probs["p2"]).abs().mean().item()
             pdi = (pdi_p1 + pdi_p2) / 2.0
             train_metrics["pdi"] = pdi
             
+            # Compute Flip Rate (using histogram L1 distance as a proxy for hard argmax flips)
+            # sum(|H_t - H_{t-1}|) / (2 * N) gives the proportion of assignments that changed bin
+            h1_diff = (train_metrics["hist_p1"] - prev_epoch_probs["hist_p1"]).abs().sum().item()
+            h2_diff = (train_metrics["hist_p2"] - prev_epoch_probs["hist_p2"]).abs().sum().item()
+            N1 = train_metrics["hist_p1"].sum().item()
+            N2 = train_metrics["hist_p2"].sum().item()
+            flip_p1 = h1_diff / (2 * N1) if N1 > 0 else 0.0
+            flip_p2 = h2_diff / (2 * N2) if N2 > 0 else 0.0
+            flip_rate = (flip_p1 + flip_p2) / 2.0
+            train_metrics["flip_rate"] = flip_rate
+            
         prev_epoch_probs = {
             "p1": train_metrics["mean_p1_prob"].clone(),
-            "p2": train_metrics["mean_p2_prob"].clone()
+            "p2": train_metrics["mean_p2_prob"].clone(),
+            "hist_p1": train_metrics["hist_p1"].clone(),
+            "hist_p2": train_metrics["hist_p2"].clone()
         }
         
         if val_loader is not None:
@@ -669,6 +693,7 @@ def train(
             "train_entropy": round(train_metrics.get("entropy", 0.0), 3),
             "train_tension": round(train_metrics.get("tension", 0.0), 4),
             "train_pdi": round(train_metrics.get("pdi", 0.0), 4),
+            "train_flip": round(train_metrics.get("flip_rate", 0.0), 4),
             "val_loss": round(val_metrics["loss"], 4),
             "edge_weight": round(edge_weight, 3),
         }
@@ -681,7 +706,7 @@ def train(
 
         # Console log
         cr_str = f" | compile={compile_rate*100:.1f}%" if compile_rate is not None else ""
-        ent_tension_str = f", ent={train_metrics.get('entropy', 0.0):.2f}, ts={train_metrics.get('tension', 0.0):.3f}, pdi={train_metrics.get('pdi', 0.0):.3f}"
+        ent_tension_str = f", ent={train_metrics.get('entropy', 0.0):.2f}, ts={train_metrics.get('tension', 0.0):.3f}, pdi={train_metrics.get('pdi', 0.0):.3f}, flip={train_metrics.get('flip_rate', 0.0):.3f}"
         print(f"Epoch {epoch:3d}/{epochs} | train={train_metrics['loss']:.4f} (ty={train_metrics['l_type']:.2f}, ed={train_metrics['l_edge']:.2f}{ent_tension_str}) | val={val_loss:.4f}{cr_str}")
 
         # Save best checkpoint
