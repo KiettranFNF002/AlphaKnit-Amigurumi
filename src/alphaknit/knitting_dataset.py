@@ -155,7 +155,11 @@ def make_dataloaders(dataset_dir: str, val_split: float = 0.1,
             .map(decode_and_extract)
             .batched(batch_size)
         )
-        train_loader = wds.WebLoader(train_ds, batch_size=None, num_workers=num_workers)
+        loader_kwargs = {"pin_memory": True}
+        if num_workers > 0:
+            loader_kwargs["prefetch_factor"] = 2
+            
+        train_loader = wds.WebLoader(train_ds, batch_size=None, num_workers=num_workers, **loader_kwargs)
         
         if val_pattern is not None:
             val_ds = (
@@ -163,7 +167,7 @@ def make_dataloaders(dataset_dir: str, val_split: float = 0.1,
                 .map(decode_and_extract)
                 .batched(batch_size)
             )
-            val_loader = wds.WebLoader(val_ds, batch_size=None, num_workers=num_workers)
+            val_loader = wds.WebLoader(val_ds, batch_size=None, num_workers=num_workers, **loader_kwargs)
             print(f"Loaded WebDataset shards: {len(train_files)} Train | {len(val_files)} Val")
             return train_loader, val_loader
         else:

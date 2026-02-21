@@ -34,6 +34,7 @@ def train_epoch(
     edge_weight: float = 1.0,    # Phase 9B Curriculum control
     sector_weight: float = 0.0,  # Phase 9B Curriculum control
     parent_noise_prob: float = 0.0, # Phase 9B Stage 1 Noise
+    grad_accum_steps: int = 1,
 ) -> dict:
     """Run one training epoch. Returns dict of average losses."""
     model.train()
@@ -150,13 +151,18 @@ def train_epoch(
         W_DEG = 0.2
         W_DIST = 0.01
         
-        loss = (W_TYPE * loss_type) + (W_PARENT * loss_parent) + (W_DEG * loss_deg) + (W_DIST * loss_dist)
-
+        loss_val = (W_TYPE * loss_type) + (W_PARENT * loss_parent) + (W_DEG * loss_deg) + (W_DIST * loss_dist)
+        
+        # Scale loss before backward for gradient accumulation
+        loss = loss_val / grad_accum_steps
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
+        
+        if (n_batches + 1) % grad_accum_steps == 0:
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+            optimizer.zero_grad()
 
-        total_loss += loss.item()
+        total_loss += loss_val.item()
         total_l_type += loss_type.item()
         total_l_parent += loss_parent.item() if isinstance(loss_parent, torch.Tensor) else loss_parent
         total_l_deg += loss_deg.item() if isinstance(loss_deg, torch.Tensor) else loss_deg
@@ -366,7 +372,8 @@ def train(
     early_stop_patience: int = 10,    # Phase 8: stop if no improvement
     log_compile_every: int = 5,       # Phase 8: compile rate every N epochs
     resume_checkpoint: str = None,    # Phase 8: resume from checkpoint
-    num_workers: int = 2,             # Phase 10: dataloader multiprocessing
+    num_workers: int = 4,             # Phase 10: dataloader multiprocessing
+    grad_accum_steps: int = 4,        # Phase 10: gradient accumulation for T4 VRAM
 ):
     """Full training loop with checkpointing."""
 
@@ -473,7 +480,8 @@ def train(
         parent_noise_prob = 0.05 if epoch <= 10 else 0.0
 
         train_metrics = train_epoch(model, train_loader, optimizer, criterion, criterion_p, device, 
-                                    edge_weight=edge_weight, sector_weight=sector_weight, parent_noise_prob=parent_noise_prob)
+                                    edge_weight=edge_weight, sector_weight=sector_weight, 
+                                    parent_noise_prob=parent_noise_prob, grad_accum_steps=grad_accum_steps)
         
         if val_loader is not None:
             # We must evaluate with edge_weight=1.0 so that the validation loss is a STATIC, absolute metric.
@@ -573,13 +581,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--dataset_dir", type=str, default="data/processed/dataset")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--run_name", type=str, default="phase9b_dev")
     parser.add_argument("--resume_checkpoint", type=str, default="")
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--grad_accum_steps", type=int, default=4)
     args = parser.parse_args()
     
     train(
@@ -590,5 +599,6 @@ if __name__ == "__main__":
         checkpoint_dir=args.checkpoint_dir,
         run_name=args.run_name,
         resume_checkpoint=args.resume_checkpoint,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        grad_accum_steps=args.grad_accum_steps
     )
