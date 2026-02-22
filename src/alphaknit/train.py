@@ -94,6 +94,7 @@ class PhaseDetector:
             self.margin_history.append(margin)
 
     def grammar_ready(self, current_epoch):
+        margin_std = 0.0
         # 0. Hysteresis Check: Margin must be stable (low variance) and positive
         if len(self.margin_history) >= 4:
             recent_margins = self.margin_history[-4:]
@@ -121,12 +122,11 @@ class PhaseDetector:
         h2 = self.history[-2]
         h3 = self.history[-3]
 
-        # 1. Entropy Stability (Plateau detection)
-        entropy_stable = (abs(h1["entropy"] - h2["entropy"]) < self.entropy_threshold and 
-                          abs(h2["entropy"] - h3["entropy"]) < self.entropy_threshold)
+        # 1. Entropy Trigger (must be below target)
+        entropy_ok = h1["entropy"] <= self.entropy_threshold
         
         # 2. Compile Success (Grammar Mastery)
-        compile_ok = True
+        compile_ok = False
         recent_compiles = [h["compile_rate"] for h in self.history if h["compile_rate"] is not None]
         if recent_compiles:
             compile_ok = recent_compiles[-1] >= self.compile_threshold
@@ -134,7 +134,7 @@ class PhaseDetector:
         # 3. PDI Stability (Cognitive Locking)
         pdi_ok = h1["pdi"] < self.pdi_threshold if h1["pdi"] > 0 else True
 
-        ready = entropy_stable and compile_ok and pdi_ok
+        ready = entropy_ok and compile_ok and pdi_ok
         if ready:
             print(f"🧠 GRS (Grammar Readiness Score) PASSED at Epoch {current_epoch} (Margin Std: {margin_std:.4f})")
         return ready
@@ -168,6 +168,8 @@ def train_epoch(
     anchor_batch: dict = None, # v6.6-F Level 2: For invariant curvature
     fingerprint: FeatureFingerprint = None, # v6.6-F Level 3: Mechanistic Identity
     semantics: SemanticsEngine = None, # v6.6-F Level 4: Semantic Topology
+    radius_scale: float = 0.0, # v6.7-G: phase-2 radius jitter cap
+    tension_noise: float = 0.0, # v6.7-G: phase-2 tension noise cap
 ) -> dict:
     """Run one training epoch. Returns dict of average losses."""
     model.train()
@@ -197,6 +199,7 @@ def train_epoch(
     total_delta_dist = 0.0 
     total_shadow_delta = 0.0 # v6.6-F Level 3
     total_flux = 0.0 # v6.6-F Level 4
+    total_l_curvature = 0.0 # v6.7-G
     shadow_counts = 0
     
     n_batches = 0
@@ -209,6 +212,8 @@ def train_epoch(
         point_cloud = batch['point_cloud'].to(device) # (B, N, 3) 
         src_tokens  = batch['src_tokens'].to(device)  # (B, T, 3)
         tgt_tokens  = batch['tgt_tokens'].to(device)  # (B, T, 3)
+        if radius_scale > 0:
+            point_cloud = point_cloud + (torch.randn_like(point_cloud) * radius_scale)
 
         # Apply Parent Noise
         if parent_noise_prob > 0.0:
@@ -368,6 +373,19 @@ def train_epoch(
             
             # Combine internal tension metrics
             loss_tension = loss_tension + 0.005 * loss_entropy_bar + 0.002 * loss_div
+            if tension_noise > 0:
+                loss_tension = loss_tension + (torch.randn((), device=device) * tension_noise)
+
+        # 6. Curvature hint with Huber loss (relative topology signal)
+        curvature_target = torch.zeros((B, T, 1), device=device)
+        curvature_target[tgt_tokens[:, :, 0] == config.VOCAB.get("inc", 6)] = 1.0
+        curvature_target[tgt_tokens[:, :, 0] == config.VOCAB.get("dec", 7)] = -1.0
+        curvature_pred = getattr(model, "last_curvature_hint", None)
+        if curvature_pred is not None:
+            curv_valid = (tgt_tokens[:, :, 0] != config.PAD_ID).unsqueeze(-1)
+            loss_curvature = F.huber_loss(curvature_pred[curv_valid], curvature_target[curv_valid], reduction="mean")
+        else:
+            loss_curvature = torch.tensor(0.0, device=device)
 
         # v6.0/6.1: Topology Tension Field (TTF) and Structural Metrics
         struct_metrics = compute_structural_metrics(logits_type, tgt_tokens[:, :, 0], structural_mask)
@@ -393,8 +411,9 @@ def train_epoch(
              
         # Total Loss
         lambda_topo = 0.2 # v6.6-F Level 5: Pressure weight
+        lambda_curvature = 0.05
         loss_val = (1.0 * loss_type) + (0.3 * edge_weight * loss_parent) + (0.2 * loss_deg) + (0.01 * loss_dist)
-        loss_val = loss_val + (tension_weight * loss_tension) + (lambda_ttf * ttf_loss_val) + (lambda_topo * loss_topo)
+        loss_val = loss_val + (tension_weight * loss_tension) + (lambda_ttf * ttf_loss_val) + (lambda_topo * loss_topo) + (lambda_curvature * loss_curvature)
         
         # v6.1/6.6-F: Latent Capture with detachment
         if portrait is not None and hasattr(model, 'last_hidden_state') and should_measure:
@@ -456,6 +475,7 @@ def train_epoch(
         total_l_parent += loss_parent.item() if isinstance(loss_parent, torch.Tensor) else loss_parent
         total_l_deg += loss_deg.item() if isinstance(loss_deg, torch.Tensor) else loss_deg
         total_l_dist += loss_dist.item() if isinstance(loss_dist, torch.Tensor) else loss_dist
+        total_l_curvature += loss_curvature.item() if isinstance(loss_curvature, torch.Tensor) else loss_curvature
         train_epoch.total_entropy += entropy_val.item()
         train_epoch.total_tension += loss_tension.item() if isinstance(loss_tension, torch.Tensor) else loss_tension
         
@@ -485,6 +505,7 @@ def train_epoch(
         "l_edge": total_l_parent / max(n_batches, 1),
         "l_deg": total_l_deg / max(n_batches, 1),
         "l_dist": total_l_dist / max(n_batches, 1),
+        "l_curvature": total_l_curvature / max(n_batches, 1),
         "entropy": train_epoch.total_entropy / max(n_batches, 1),
         "tension": train_epoch.total_tension / max(n_batches, 1),
         "mean_p1_prob": train_epoch.epoch_prob_p1_acc / max(train_epoch.epoch_valid_batches, 1),
@@ -840,11 +861,9 @@ def train(
         compile_rate = None
         
         if not phase2_active:
-            if force_phase2 or epoch >= 15: 
+            if force_phase2:
                 phase2_active = True
                 print(f"🚀 FORCED Ignition: Triggering phase 2 at Epoch {epoch}")
-            elif epoch >= 12 and reset_optimizer: 
-                phase2_active = True
 
         # Selective Reset (Triggered only ONCE)
         if phase2_active and not reset_done:
@@ -869,6 +888,8 @@ def train(
 
         edge_weight = 1.0 
         parent_noise_prob = 0.0
+        radius_scale = 0.0 if not phase2_active else 0.02
+        tension_noise = 0.0 if not phase2_active else 0.005
 
         # v6.6-F Level 2: Anchor Batch Initialization
         anchor_batch = None
@@ -884,7 +905,8 @@ def train(
             epoch=epoch, tension_weight=tension_weight, portrait=portrait,
             intervention_engine=intervention_engine, null_suite=null_suite,
             probe_pool=probe_pool, measurement_dropout=0.3, anchor_batch=anchor_batch,
-            fingerprint=fingerprint, semantics=semantics
+            fingerprint=fingerprint, semantics=semantics,
+            radius_scale=radius_scale, tension_noise=tension_noise
         )
 
         # Update Anchors (v6.6-F Level 2)
@@ -964,24 +986,23 @@ def train(
         else:
             if epoch >= 18: scheduler.step(val_loss)
 
-        # Update Detector (v6.1: includes hysteresis support via margin)
-        # Note: compile_rate might be None if not evaluated this epoch
+        # Compile success rate (trigger metric)
+        top_confusions_readable = []
+        compile_rate, confusion = compute_compile_success_rate(model, val_loader or train_loader, device, n_batches_max=4)
+        if epoch % log_compile_every == 0 or epoch == epochs:
+            compute_compile_success_rate.checkpoint_dir = checkpoint_dir
+            compute_compile_success_rate.current_epoch = epoch
+            errors = {k: v for k, v in confusion.items() if k[0] != k[1]}
+            top_confusions = sorted(errors.items(), key=lambda x: -x[1])[:5]
+            top_confusions_readable = [{"pred": config.ID_TO_TOKEN.get(p, str(p)), "true": config.ID_TO_TOKEN.get(g, str(g)), "count": cnt} for (p, g), cnt in top_confusions]
+
+        # Update Detector (trigger-based: entropy + syntax validity)
         detector.update(train_metrics["entropy"], compile_rate, train_metrics.get("pdi", 0.0), 
                         margin=train_metrics.get("struct_margin", None))
         
         if not phase2_active and detector.grammar_ready(epoch):
-            print(f"🚀 State-Based Transition: Grammar is stable. Phase 2 READY for next epoch.")
+            print(f"🚀 Trigger-Based Transition: token entropy low and syntax validity high. Phase 2 READY.")
             phase2_active = True
-
-        # Compile success rate (Sampling)
-        top_confusions_readable = []
-        if epoch % log_compile_every == 0 or epoch == epochs:
-            compute_compile_success_rate.checkpoint_dir = checkpoint_dir
-            compute_compile_success_rate.current_epoch = epoch
-            compile_rate, confusion = compute_compile_success_rate(model, val_loader or train_loader, device, n_batches_max=8)
-            errors = {k: v for k, v in confusion.items() if k[0] != k[1]}
-            top_confusions = sorted(errors.items(), key=lambda x: -x[1])[:5]
-            top_confusions_readable = [{"pred": config.ID_TO_TOKEN.get(p, str(p)), "true": config.ID_TO_TOKEN.get(g, str(g)), "count": cnt} for (p, g), cnt in top_confusions]
 
         # Log History
         row = {

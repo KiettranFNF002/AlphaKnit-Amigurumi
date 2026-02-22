@@ -7,7 +7,7 @@ Architecture:
 
 Phase 8 changes:
   - Multi-scale encoder: max-pool + avg-pool concatenated → project to d_model
-  - BatchNorm after each MLP layer (stable with synthetic data)
+  - RMSNorm after each MLP linear layer (stable with synthetic data)
   - Compile-guided beam search: prunes beams that are already invalid
 """
 
@@ -17,6 +17,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from . import config
+
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (no mean-centering)."""
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt()
+        return (x / rms) * self.weight
 
 
 # ------------------------------------------------------------------ #
@@ -37,16 +50,16 @@ class PointNetEncoder(nn.Module):
 
     def __init__(self, d_model: int = config.D_MODEL):
         super().__init__()
-        # Per-point MLP with BatchNorm (stable on clean synthetic data)
+        # Per-point MLP with RMSNorm (stable on small synthetic batches)
         self.mlp = nn.Sequential(
             nn.Linear(3, 64),
-            nn.BatchNorm1d(64),
+            RMSNorm(64),
             nn.ReLU(),
             nn.Linear(64, 128),
-            nn.BatchNorm1d(128),
+            RMSNorm(128),
             nn.ReLU(),
             nn.Linear(128, 256),
-            nn.BatchNorm1d(256),
+            RMSNorm(256),
             nn.ReLU(),
         )
         
@@ -54,7 +67,7 @@ class PointNetEncoder(nn.Module):
         # Phase 9C: We append [sin(theta), cos(theta), r] per pool → total +3 to global feature?
         # Actually, theta and r are PER POINT. We must append them BEFORE pooling, OR
         # compute them, append to raw features, and push through MLP. 
-        # But ADR says: "Append [sin(θ), cos(θ), r] to input features AFTER normalization (post-BatchNorm)."
+        # But ADR says: "Append [sin(θ), cos(θ), r] to input features AFTER normalization (post-RMSNorm)."
         # This implies we can do a secondary MLP or just append it to the 256-dim feature 
         # before pooling. Let's append to the 256-dim feature array before pooling.
         
@@ -72,7 +85,7 @@ class PointNetEncoder(nn.Module):
         """
         B, N, _ = x.shape
 
-        # Per-point features — BatchNorm1d expects (B*N, C)
+        # Per-point features
         x_flat = x.reshape(B * N, 3)
         feat = self.mlp(x_flat)          # (B*N, 256)
         feat = feat.reshape(B, N, 256)   # (B, N, 256)
@@ -117,7 +130,7 @@ class PointNetEncoder(nn.Module):
         # Features to append: sin(theta), cos(theta), r
         spatial_feats = torch.stack([torch.sin(theta), torch.cos(theta), r], dim=-1) # (B, N, 3)
         
-        # Append AFTER MLP (post-BatchNorm)
+        # Append AFTER MLP (post-RMSNorm)
         feat = torch.cat([feat, spatial_feats], dim=-1) # (B, N, 256 + 3 = 259)
 
         # Multi-scale pooling
@@ -155,6 +168,7 @@ class KnittingTransformer(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
+        self.n_heads = n_heads
         self.max_seq_len = max_seq_len
         self.max_parent_offset = max_parent_offset
 
@@ -194,6 +208,7 @@ class KnittingTransformer(nn.Module):
             nn.ReLU(),
             nn.Linear(d_model, max_parent_offset)
         )
+        self.curvature_head = nn.Linear(d_model, 1)
 
         self._init_weights()
 
@@ -203,6 +218,34 @@ class KnittingTransformer(nn.Module):
         nn.init.xavier_uniform_(self.p2_emb.weight)
         nn.init.xavier_uniform_(self.type_head.weight)
         nn.init.zeros_(self.type_head.bias)
+
+    def _build_topology_bias(self, p1s: torch.Tensor, p2s: torch.Tensor) -> torch.Tensor:
+        """
+        Build additive attention bias tensor (B, T, T):
+          - parent bias: +1.5
+          - same-row proxy bias: +0.5
+        """
+        B, T = p1s.shape
+        device = p1s.device
+        bias = torch.zeros(B, T, T, device=device)
+
+        q_idx = torch.arange(T, device=device).view(1, T).expand(B, T)
+        parent_bias = 1.5
+
+        p1_parent = q_idx - p1s
+        p1_valid = (p1s > 0) & (p1_parent >= 0)
+        safe_p1_parent = p1_parent.clamp_min(0)
+        bias.scatter_add_(2, safe_p1_parent.unsqueeze(-1), p1_valid.unsqueeze(-1).to(bias.dtype) * parent_bias)
+
+        p2_parent = q_idx - p2s
+        p2_valid = (p2s > 0) & (p2_parent >= 0)
+        safe_p2_parent = p2_parent.clamp_min(0)
+        bias.scatter_add_(2, safe_p2_parent.unsqueeze(-1), p2_valid.unsqueeze(-1).to(bias.dtype) * parent_bias)
+
+        same_row_bias = 0.5
+        same_row = (p1s.unsqueeze(2) == p1s.unsqueeze(1)) & (p1s.unsqueeze(2) > 0)
+        bias = bias + same_row.to(bias.dtype) * same_row_bias
+        return bias
 
     def forward(
         self,
@@ -239,21 +282,28 @@ class KnittingTransformer(nn.Module):
         tgt_emb = combined_emb + self.pos_emb(positions)      # (B, T, d_model)
 
         # Causal mask (prevent attending to future tokens)
-        causal_mask = torch.triu(
-            torch.ones((T, T), dtype=torch.bool, device=tgt_tokens.device),
-            diagonal=1
+        causal_mask = torch.zeros((T, T), dtype=tgt_emb.dtype, device=tgt_tokens.device)
+        causal_mask = causal_mask.masked_fill(
+            torch.triu(torch.ones((T, T), dtype=torch.bool, device=tgt_tokens.device), diagonal=1),
+            float("-inf"),
         )
+        topo_bias = self._build_topology_bias(p1s, p2s)
+        attn_mask = (causal_mask.unsqueeze(0) + topo_bias).repeat_interleave(self.n_heads, dim=0)
+        key_padding = tgt_key_padding_mask
+        if key_padding is not None and key_padding.dtype == torch.bool:
+            key_padding = torch.zeros_like(key_padding, dtype=tgt_emb.dtype).masked_fill(key_padding, float("-inf"))
 
         # Decode (shared hidden state h)
         h = self.decoder(
             tgt=tgt_emb,
             memory=memory,
-            tgt_mask=causal_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
+            tgt_mask=attn_mask,
+            tgt_key_padding_mask=key_padding,
         )  # (B, T, d_model)
         
         # v6.0: Expose last hidden state for research telemetry (Latent Phase Portrait)
         self.last_hidden_state = h
+        self.last_curvature_hint = self.curvature_head(h)
 
         # 1. Type Logits
         logits_type = self.type_head(h) # (B, T, vocab_size)

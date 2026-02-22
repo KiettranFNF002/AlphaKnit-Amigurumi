@@ -1,8 +1,9 @@
 import math
 import numpy as np
 import pytest
+import torch
 from alphaknit.compiler import KnittingCompiler
-from alphaknit.simulator import ForwardSimulator
+from alphaknit.simulator import ForwardSimulator, DifferentiableSimulator
 
 COMPILER = KnittingCompiler()
 SIM = ForwardSimulator(stitch_width=0.5, stitch_height=0.4)
@@ -120,3 +121,20 @@ class TestMesh:
         graph = compile_tokens(['mr_6'] + ['sc'] * 6)
         mesh = SIM.build_mesh(graph)
         assert len(mesh.faces) > 0
+
+
+class TestDifferentiableSimulator:
+
+    def test_gumbel_softmax_has_gradients(self):
+        sim = DifferentiableSimulator(temperature=0.7)
+        logits = torch.randn(2, 5, 4, requires_grad=True)
+        weights = sim.sample_edge_weights(logits)
+        weights.sum().backward()
+        assert logits.grad is not None
+
+    def test_falsification_score_no_backprop(self):
+        sim = DifferentiableSimulator()
+        vertices = torch.randn(1, 4, 3, requires_grad=True)
+        edges = torch.tensor([[0, 1], [1, 2], [2, 3]])
+        score = sim.falsification_score(vertices, edges)
+        assert score.requires_grad is False
