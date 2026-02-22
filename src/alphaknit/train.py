@@ -634,10 +634,8 @@ def compute_compile_success_rate(
             plt.title(f"Emergence Watch - Size: {len(G.nodes)}")
             plt.savefig(filepath, dpi=120, bbox_inches='tight')
             plt.close()
-        except:
-            pass 
-
-    model.eval()
+        except Exception:
+            pass  # Visualization is optional; skip silently if matplotlib/networkx unavailable
     compiler = KnittingCompiler()
     compile_ok = 0
     compile_total = 0
@@ -668,9 +666,8 @@ def compute_compile_success_rate(
                         filepath = os.path.join(watch_dir, f"epoch_{epoch:03d}_sample_{graphs_saved}.png")
                         _save_emergence_graph(graph, filepath)
                         graphs_saved += 1
-            except:
-                pass
-            compile_total += 1
+            except Exception:
+                pass  # Invalid token sequences are expected during training; count failures separately
 
             # Confusion matrix
             gt_ids = tgt_tokens[b].tolist() 

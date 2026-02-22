@@ -81,7 +81,7 @@ class AmigurumiStackParser:
                             # Extract number from "x 6"
                             multiplier = int(re.search(r'\d+', next_token).group())
                             i += 1 # Skip multiplier token
-                        except: pass
+                        except (AttributeError, ValueError): pass
                     # Format: "(sc, inc) 6" (implicit multiplier)
                     elif next_token.isdigit(): 
                         multiplier = int(next_token)
