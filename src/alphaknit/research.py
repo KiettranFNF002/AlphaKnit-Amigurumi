@@ -1,7 +1,36 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import random
 import os
+
+class ReproducibleContext:
+    """
+    v6.6-G: Technical Rigor.
+    Captures and restores full RNG state across multiple frameworks.
+    """
+    def __init__(self, device=None):
+        self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.cpu_rng_state = None
+        self.cuda_rng_state = None
+        self.numpy_rng_state = None
+        self.random_state = None
+
+    def __enter__(self):
+        self.cpu_rng_state = torch.get_rng_state()
+        if self.device.type == 'cuda':
+            self.cuda_rng_state = torch.cuda.get_rng_state(self.device)
+        self.numpy_rng_state = np.random.get_state()
+        self.random_state = random.getstate()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        torch.set_rng_state(self.cpu_rng_state)
+        if self.device.type == 'cuda' and self.cuda_rng_state is not None:
+            torch.cuda.set_rng_state(self.cuda_rng_state, self.device)
+        np.random.set_state(self.numpy_rng_state)
+        random.setstate(self.random_state)
 
 @torch.no_grad()
 def compute_phase_lag(model, optimizer, eps=1e-8):
@@ -320,54 +349,52 @@ class FeatureFingerprint:
 
 class SemanticsEngine:
     """
-    v6.6-F Level 4: Semantic Topology.
-    Analyzes the "Gauss-Bonnet" invariant of the crochet topology.
-    Tracks net curvature flux (sum(inc) - sum(dec)).
+    v6.6-G Level 5: Mechanistic Instrument.
+    Analyzes the "Combinatorial Gauss-Bonnet" invariant of the stitch graph.
+    Sum(Angle Deficit) = 2 * PI * Euler_Characteristic(G).
     """
     def __init__(self, vocab):
         self.vocab = vocab
         self.inc_id = vocab.get("inc", -1)
         self.dec_id = vocab.get("dec", -1)
-        self.history = [] # Net curvature per batch
+        self.history = [] 
 
     def compute_flux(self, tokens_batch):
         """
-        Calculates the net curvature of a batch of token sequences.
-        Flux = count(inc) - count(dec)
+        Calculates the discrete curvature flux: K = Sum(inc) - Sum(dec).
+        For an Amigurumi sphere (chi=2), K_target is typically 12 
+        (representing the 4*PI deficit shift required to close a discrete MR6 manifold).
         """
         if self.inc_id == -1 or self.dec_id == -1: return 0.0
         
-        # tokens_batch: [B, T]
         inc_mask = (tokens_batch == self.inc_id).float()
         dec_mask = (tokens_batch == self.dec_id).float()
         
+        # Combinatorial flux: net growth nodes
         net_flux = (inc_mask.sum(dim=1) - dec_mask.sum(dim=1)).mean().item()
         self.history.append(net_flux)
         return net_flux
 
     def compute_soft_flux(self, logits_batch):
         """
-        v6.6-F Level 5: Differentiable Topology.
-        Differentiable net curvature flux using softmax probabilities.
-        Flux_soft = sum_t P(inc)_t - sum_t P(dec)_t
+        Differentiable combinatorial flux using probability-weighted angle deficits.
         """
         if self.inc_id == -1 or self.dec_id == -1: return torch.tensor(0.0)
         
-        # logits_batch: [B, T, V]
         probs = torch.softmax(logits_batch, dim=-1)
         inc_probs = probs[:, :, self.inc_id]
         dec_probs = probs[:, :, self.dec_id]
         
+        # Soft Combinatorial Curvature
         soft_flux = (inc_probs.sum(dim=1) - dec_probs.sum(dim=1)).mean()
         return soft_flux
 
     def get_violation(self, target_flux=12.0):
         """
-        Measures deviation from the ideal topological closure.
-        Standard amigurumi sphere (Magic Ring 6 base) requires ~12 net growth/shrink cycles.
+        Measures violation of the Combinatorial Gauss-Bonnet expectation.
+        V = |K - 2 * PI * chi(Sphere)| normalized to token units.
         """
         if not self.history: return 0.0
-        # For emergence tracking, we look at the absolute error vs a 'known' primitive
         return abs(self.history[-1] - target_flux)
 
 

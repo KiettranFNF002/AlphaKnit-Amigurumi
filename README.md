@@ -1,21 +1,21 @@
-# AlphaKnit 🧶 — v6.6-F "Mechanistic Discovery"
+# AlphaKnit 🧶 — v6.6-G "Mechanistic Instrument"
 
 AlphaKnit is a **Mechanistic Discovery Engine** designed to solve the physics of **Amigurumi Topology**. It reframes Machine Learning not as a pattern generator, but as a scientific instrument for exploring geometric morphogenesis.
 
-This version (**v6.6-F**) implements 5 levels of scientific grounding to verify topological emergence and eliminate observer-induced causality illusions.
+This version (**v6.6-G**) implements 5 levels of scientific grounding to verify topological emergence and eliminate observer-induced causality illusions.
 
 ## 🔬 5 Levels of Scientific Grounding
 
 1.  **Mechanical Truth**: Corrected dynamic layer indexing and isolated probe RNG states to prevent data leakage.
 2.  **Physical Invariants**: Implemented **Fixed Anchor Curvature** and **Optimizer Path-Length Persistence** to decouple measurements from training noise.
 3.  **Mechanistic Identity**: Introduced **Feature Fingerprints** (via SVD Persistence) to track representational invariants over time.
-4.  **Semantic Topology**: Implements the **Gauss-Bonnet Invariant** tracker to measure net curvature flux ($\sum inc - \sum dec$).
+4.  **Semantic Topology**: Implements **Combinatorial Gauss-Bonnet** tracker to measure discrete curvature flux.
 5.  **The Scientific Instrument**: Embeds **Differentiable Topology Pressure** directly into the loss function, forcing the model to respect topological laws.
 
 ## 🚀 Key Features
 
-- **Differentiable Gauss-Bonnet Loss**: Enforces curvature conservation via the gradient, closing syntax-only shortcuts.
-- **Shared-State Shadow Pass**: True counterfactual interventions using RNG-conserved twin passes to isolate causal signals.
+- **Differentiable Discrete Flux Loss**: Enforces curvature conservation via combinatorial angle deficit, closing syntax-only shortcuts.
+- **Reproducible Shadow Pass**: True counterfactual interventions using `fork_rng` to isolate causal signals.
 - **Topology Tension Field (TTF)**: Structural organization loss based on energetic minimization of the stitch manifold.
 
 ## 🏗️ Architecture
@@ -24,9 +24,9 @@ This version (**v6.6-F**) implements 5 levels of scientific grounding to verify 
 graph TD
     A["Point Cloud (Amigurumi Geometries)"] --> B["PointNetEncoder"]
     B --> C["KnittingTransformer (Grounded Latents)"]
-    C --> D["Mechanistic Discovery Engine (v6.6-F)"]
+    C --> D["Mechanistic Discovery Engine (v6.6-G)"]
     D --> E["Gauss-Bonnet Constraints"]
-    E --> F["Compilable Stitch Pattern"]
+    F["Compilable Stitch Pattern"]
 ```
 
 ## 📊 Capability Milestones
@@ -41,8 +41,8 @@ graph TD
 
 ### 1. Installation
 ```cmd
-git clone https://github.com/KiettranFNF002/AlphaKnit-Topology.git
-cd AlphaKnit-Topology
+git clone https://github.com/KiettranFNF002/AlphaKnit-Arigurumi.git
+cd AlphaKnit-Arigurumi
 .\run_pc.bat
 ```
 

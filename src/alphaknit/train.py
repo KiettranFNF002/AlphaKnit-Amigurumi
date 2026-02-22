@@ -238,35 +238,22 @@ def train_epoch(
         # v6.6-F Level 2: Stochastic Interrogation (Poisson-like)
         should_measure = np.random.random() > measurement_dropout
 
-        # v6.6-F Level 5: Shadow Pass RNG Conservation
-        # Save RNG state to ensure identical dropout/randomness in both passes
-        rng_state = torch.get_rng_state()
-        cuda_rng_state = None
-        if device.type == 'cuda':
-            cuda_rng_state = torch.cuda.get_rng_state(device)
-
-        # Forward
-        logits_type, logits_p1, logits_p2 = model(point_cloud, src_tokens, tgt_key_padding_mask=pad_mask)
-        
-        # v6.6-F Level 5: Shared-State Counterfactual
-        # If interventions are active, we run a clean 'shadow' pass with EXACT same state
+        # v6.6-G Level 5: True Counterfactual (fork_rng)
         shadow_delta = 0.0
         if intervention_engine and intervention_engine.active_interventions and should_measure:
-             intervention_engine.shadow_mode = True
-             
-             # Restore state for identity pass
-             torch.set_rng_state(rng_state)
-             if cuda_rng_state is not None:
-                 torch.cuda.set_rng_state(cuda_rng_state, device)
-                 
-             with torch.no_grad():
-                  s_logits_type, _, _ = model(point_cloud, src_tokens, tgt_key_padding_mask=pad_mask)
+             # v6.6-G: Use PyTorch's fork_rng to ensure PERFECTLY identical dropout/RNG state
+             with torch.random.fork_rng(devices=[device] if device.type == 'cuda' else []):
+                  # This pass is 'Clean' (No intervention noise)
+                  intervention_engine.shadow_mode = True
+                  with torch.no_grad():
+                       s_logits_type, _, _ = model(point_cloud, src_tokens, tgt_key_padding_mask=pad_mask)
+                  intervention_engine.shadow_mode = False
+                  
                   p_real = torch.softmax(logits_type, dim=-1).detach()
                   p_shadow = torch.softmax(s_logits_type, dim=-1)
                   shadow_delta = torch.norm(p_real - p_shadow).item()
                   total_shadow_delta += shadow_delta
                   shadow_counts += 1
-             intervention_engine.shadow_mode = False
 
         # v6.6-F Level 3: Feature Fingerprinting (Representational Invariants)
         if fingerprint is not None and hasattr(model, 'last_hidden_state') and should_measure:

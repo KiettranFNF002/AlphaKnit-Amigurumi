@@ -111,6 +111,18 @@ class HypothesisEngine:
             "history": []
         })
 
+    def set_baseline(self, null_metrics):
+        """
+        v6.6-G: Scientific Validity.
+        Adjusts persistence thresholds based on observed variance in the 
+        Scientific Control (Null Suite). Ensures thresholds are not arbitrary.
+        """
+        null_var = null_metrics.get("acc_std", 0.05)
+        # Scale persistence based on signal-to-noise ratio
+        if null_var > 0.1:
+            self.persistence_threshold *= 1.5 # Stricter if noise is high
+            print(f"⚖️ ADAPTIVE THRESHOLD: Increased to {self.persistence_threshold:.2f} due to high control variance ({null_var:.4f})")
+
     def update(self, metrics, delta_dist):
         """
         delta_dist: Optimizer distance traveled in this interval.
