@@ -41,8 +41,8 @@ graph TD
 
 ### 1. Installation
 ```cmd
-git clone https://github.com/KiettranFNF002/AlphaKnit-Arigurumi.git
-cd AlphaKnit-Arigurumi
+git clone https://github.com/KiettranFNF002/AlphaKnit-Amigurumi.git
+cd AlphaKnit-Amigurumi
 .\run_pc.bat
 ```
 
