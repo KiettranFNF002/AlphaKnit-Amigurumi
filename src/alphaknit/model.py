@@ -288,7 +288,8 @@ class KnittingTransformer(nn.Module):
             float("-inf"),
         )
         topo_bias = self._build_topology_bias(p1s, p2s)
-        attn_mask = (causal_mask.unsqueeze(0) + topo_bias).repeat_interleave(self.n_heads, dim=0)
+        attn_mask = causal_mask.unsqueeze(0) + topo_bias
+        attn_mask = attn_mask.unsqueeze(1).expand(B, self.n_heads, T, T).reshape(B * self.n_heads, T, T)
         key_padding = tgt_key_padding_mask
         if key_padding is not None and key_padding.dtype == torch.bool:
             key_padding = torch.zeros_like(key_padding, dtype=tgt_emb.dtype).masked_fill(key_padding, float("-inf"))

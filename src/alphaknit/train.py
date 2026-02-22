@@ -122,7 +122,7 @@ class PhaseDetector:
         h2 = self.history[-2]
         h3 = self.history[-3]
 
-        # 1. Entropy Trigger (must be below target)
+        # 1. Entropy Trigger (must be at or below target)
         entropy_ok = h1["entropy"] <= self.entropy_threshold
         
         # 2. Compile Success (Grammar Mastery)
@@ -136,7 +136,10 @@ class PhaseDetector:
 
         ready = entropy_ok and compile_ok and pdi_ok
         if ready:
-            print(f"🧠 GRS (Grammar Readiness Score) PASSED at Epoch {current_epoch} (Margin Std: {margin_std:.4f})")
+            if len(self.margin_history) >= 4:
+                print(f"🧠 GRS (Grammar Readiness Score) PASSED at Epoch {current_epoch} (Margin Std: {margin_std:.4f})")
+            else:
+                print(f"🧠 GRS (Grammar Readiness Score) PASSED at Epoch {current_epoch}")
         return ready
 
 
@@ -374,7 +377,7 @@ def train_epoch(
             # Combine internal tension metrics
             loss_tension = loss_tension + 0.005 * loss_entropy_bar + 0.002 * loss_div
             if tension_noise > 0:
-                loss_tension = loss_tension + (torch.randn((), device=device) * tension_noise)
+                loss_tension = loss_tension + ((torch.randn((), device=device) * tension_noise).detach())
 
         # 6. Curvature hint with Huber loss (relative topology signal)
         curvature_target = torch.zeros((B, T, 1), device=device)
