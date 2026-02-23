@@ -16,9 +16,9 @@ import torch
 import tempfile
 
 from alphaknit import config
-from alphaknit.model import PointNetEncoder, KnittingTransformer
+from alphaknit.model import PointNetEncoder, KnittingTransformer, RMSNorm
 from alphaknit.knitting_dataset import KnittingDataset, make_dataloaders
-from alphaknit.train import train_epoch, evaluate
+from alphaknit.train import train_epoch, evaluate, PhaseDetector
 
 
 # ------------------------------------------------------------------ #
@@ -77,6 +77,12 @@ class TestPointNetEncoder:
         out = enc(x)
         assert torch.all(torch.isfinite(out))
 
+    def test_uses_rmsnorm_layers(self):
+        enc = PointNetEncoder(d_model=32)
+        assert isinstance(enc.mlp[1], RMSNorm)
+        assert isinstance(enc.mlp[4], RMSNorm)
+        assert isinstance(enc.mlp[7], RMSNorm)
+
 
 # ------------------------------------------------------------------ #
 #  KnittingTransformer                                                 #
@@ -100,6 +106,20 @@ class TestKnittingTransformer:
         assert torch.all(torch.isfinite(logits_type))
         assert torch.all(torch.isfinite(l1))
         assert torch.all(torch.isfinite(l2))
+
+    def test_curvature_hint_shape(self, model):
+        pc = torch.randn(2, 64, 3)
+        tokens = torch.randint(0, config.VOCAB_SIZE, (2, 8, 3))
+        _ = model(pc, tokens)
+        assert model.last_curvature_hint.shape == (2, 8, 1)
+
+    def test_topology_bias_values(self, model):
+        p1 = torch.tensor([[0, 1, 1, 2]])
+        p2 = torch.tensor([[0, 0, 0, 0]])
+        bias = model._build_topology_bias(p1, p2)
+        assert bias.shape == (1, 4, 4)
+        assert bias[0, 2, 1].item() >= 1.5
+        assert bias[0, 1, 2].item() >= 0.5
 
     def test_greedy_decode_format(self):
         torch.manual_seed(0)
@@ -210,3 +230,10 @@ class TestTraining:
         # Min loss should be lower than first epoch (robust to non-monotonic decrease)
         assert min(losses) < losses[0], \
             f"Loss did not decrease at all: {losses}"
+
+    def test_phase_detector_requires_entropy_and_compile(self):
+        detector = PhaseDetector(entropy_threshold=0.05, compile_threshold=0.85, min_epochs=3)
+        detector.update(0.04, 0.9, 0.0, margin=0.2)
+        detector.update(0.04, 0.88, 0.0, margin=0.2)
+        detector.update(0.04, 0.86, 0.0, margin=0.2)
+        assert detector.grammar_ready(3)

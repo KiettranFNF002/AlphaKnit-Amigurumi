@@ -13,6 +13,9 @@ This is deterministic and correct enough for training data generation.
 
 import math
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from .stitch_graph import StitchGraph
 
 
@@ -223,3 +226,58 @@ class ForwardSimulator:
         mesh = self.build_mesh(graph)
         mesh.export(path)
         return path
+
+
+class DifferentiableSimulator(nn.Module):
+    """
+    Hybrid differentiable geometry simulator for inverse morphogenesis training.
+    """
+
+    def __init__(self, temperature: float = 1.0):
+        super().__init__()
+        self.temperature = temperature
+
+    def set_temperature(self, temperature: float):
+        self.temperature = max(float(temperature), 1e-3)
+
+    def sample_edge_weights(self, edge_logits: torch.Tensor) -> torch.Tensor:
+        return F.gumbel_softmax(edge_logits, tau=self.temperature, hard=False, dim=-1)
+
+    def edge_length_regularization(self, vertices: torch.Tensor, edges: torch.Tensor, target: float = 1.0) -> torch.Tensor:
+        src = vertices[:, edges[:, 0], :]
+        dst = vertices[:, edges[:, 1], :]
+        lengths = torch.linalg.norm(src - dst, dim=-1)
+        return F.smooth_l1_loss(lengths, torch.full_like(lengths, target))
+
+    def chamfer_loss(self, pred_points: torch.Tensor, target_points: torch.Tensor) -> torch.Tensor:
+        dist = torch.cdist(pred_points, target_points)
+        return dist.min(dim=2).values.mean() + dist.min(dim=1).values.mean()
+
+    def normal_consistency_loss(self, pred_normals: torch.Tensor, target_normals: torch.Tensor) -> torch.Tensor:
+        pred_normals = F.normalize(pred_normals, dim=-1)
+        target_normals = F.normalize(target_normals, dim=-1)
+        return (1.0 - (pred_normals * target_normals).sum(dim=-1)).mean()
+
+    def geometry_loss(
+        self,
+        pred_points: torch.Tensor,
+        target_points: torch.Tensor,
+        pred_normals: torch.Tensor,
+        target_normals: torch.Tensor,
+        vertices: torch.Tensor,
+        edges: torch.Tensor,
+    ) -> torch.Tensor:
+        return (
+            self.chamfer_loss(pred_points, target_points)
+            + self.normal_consistency_loss(pred_normals, target_normals)
+            + self.edge_length_regularization(vertices, edges)
+        )
+
+    @torch.no_grad()
+    def falsification_score(self, vertices: torch.Tensor, edges: torch.Tensor, stiffness: float = 1.0) -> torch.Tensor:
+        src = vertices[:, edges[:, 0], :]
+        dst = vertices[:, edges[:, 1], :]
+        rest = torch.linalg.norm(src - dst, dim=-1).mean(dim=-1, keepdim=True)
+        stretch = torch.linalg.norm(src - dst, dim=-1) - rest
+        spring_energy = 0.5 * stiffness * (stretch ** 2)
+        return spring_energy.mean(dim=-1)
