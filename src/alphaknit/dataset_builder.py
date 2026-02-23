@@ -37,8 +37,6 @@ class DatasetBuilder:
         self.min_rows = min_rows
         self.max_rows = max_rows
         self.seed = seed
-        random.seed(seed)
-        np.random.seed(seed)
 
         # Phase 9B: Edge-Action Generator + DAG construction
         self._gen = SpatialGeneratorV2(min_rows=min_rows, max_rows=max_rows)
@@ -118,7 +116,11 @@ class DatasetBuilder:
 
     def _generate_one(self, idx: int) -> dict | None:
         """Generate and validate one sample. Returns None if invalid."""
+        py_state = random.getstate()
+        np_state = np.random.get_state()
         try:
+            random.seed(self.seed + idx)
+            np.random.seed(self.seed + idx)
             raw = self._gen.generate_pattern()
             edge_sequence = raw["edge_sequence"]
             row_data = raw["metadata"]
@@ -155,6 +157,9 @@ class DatasetBuilder:
 
         except Exception:
             return None
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
 
     def _is_valid_sample(self, sample: dict) -> bool:
         edge_sequence = sample.get("edge_sequence", [])

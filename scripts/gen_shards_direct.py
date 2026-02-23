@@ -48,10 +48,16 @@ def main():
         )
         if existing_shards:
             shard_id = int(existing_shards[-1].split("-")[1].split(".")[0]) + 1
-            for shard_name in existing_shards:
-                with tarfile.open(os.path.join(args.output_dir, shard_name), "r") as tar:
-                    count = sum(1 for m in tar.getmembers() if m.isfile() and m.name.endswith(".pt"))
-                    samples_generated += count
+            metadata_path = os.path.join(args.output_dir, "generation_metadata.json")
+            if os.path.exists(metadata_path):
+                with open(metadata_path) as f:
+                    metadata = json.load(f)
+                samples_generated = int(metadata.get("generated_samples", 0))
+            else:
+                for shard_name in existing_shards:
+                    with tarfile.open(os.path.join(args.output_dir, shard_name), "r") as tar:
+                        count = sum(1 for m in tar.getmembers() if m.isfile() and m.name.endswith(".pt"))
+                        samples_generated += count
             sample_index = samples_generated
 
     # We will use a temporary file to interface with tarfile and torch.save
@@ -120,9 +126,10 @@ def main():
     
     # Cleanup tmp dir
     os.rmdir(temp_dir)
+    invalid_ratio = skipped / max(attempts, 1)
     print(f"\nDone! Created {shard_id} shards containing {samples_generated} samples.")
     print(f"Skipped (invalid generator outputs): {skipped}")
-    print(f"Invalid ratio: {skipped / max(attempts, 1):.3f}")
+    print(f"Invalid ratio: {invalid_ratio:.3f}")
     with open(os.path.join(args.output_dir, "generation_metadata.json"), "w") as f:
         json.dump(
             {
@@ -130,7 +137,7 @@ def main():
                 "resume": args.resume,
                 "generated_samples": samples_generated,
                 "skipped_samples": skipped,
-                "invalid_ratio": skipped / max(attempts, 1),
+                "invalid_ratio": invalid_ratio,
             },
             f,
             indent=2,

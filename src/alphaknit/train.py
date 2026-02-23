@@ -749,8 +749,11 @@ def train(
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
-    train_path = os.path.normpath(dataset_dir).replace("\\", "/")
-    assert not ("dataset_5k" in train_path and "/debug/" not in f"/{train_path}/"), \
+    train_path = os.path.normpath(dataset_dir).replace("\\", "/").lower()
+    train_parts = [part for part in train_path.split("/") if part]
+    has_dataset_5k = "dataset_5k" in train_parts
+    is_debug_path = "debug" in train_parts
+    assert not (has_dataset_5k and not is_debug_path), \
         "dataset_5k is debug-only; move it under data/debug/dataset_5k."
 
     # Data
