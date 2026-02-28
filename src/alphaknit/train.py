@@ -669,12 +669,19 @@ def compute_compile_success_rate(
     compiler = KnittingCompiler()
     compile_ok = 0
     compile_total = 0
-    confusion = {}   
+    confusion = {}
     graphs_saved = 0
-
+    model.eval()
     pbar = tqdm(loader, desc="Compiling", total=n_batches_max, leave=False)
-    for i, (point_cloud, src_tokens, tgt_tokens) in enumerate(pbar):
+    for i, batch in enumerate(pbar):
         if i >= n_batches_max: break
+        # Normalize: WebDataset returns (pc, src, tgt) tuples
+        if isinstance(batch, (list, tuple)):
+            point_cloud, src_tokens, tgt_tokens = batch[0], batch[1], batch[2]
+        else:
+            point_cloud = batch['point_cloud']
+            src_tokens  = batch['src_tokens']
+            tgt_tokens  = batch['tgt_tokens']
         point_cloud = point_cloud.to(device, non_blocking=device.type == "cuda")
         pred_ids_list = model.greedy_decode(point_cloud, max_len=config.MAX_SEQ_LEN)
 
@@ -699,8 +706,10 @@ def compute_compile_success_rate(
             except Exception:
                 pass  # Invalid token sequences are expected during training; count failures separately
 
+            compile_total += 1  # Always count, regardless of compile success
+
             # Confusion matrix
-            gt_ids = tgt_tokens[b].tolist() 
+            gt_ids = tgt_tokens[b].tolist()
             pred_seq = pred_ids[:len(gt_ids)]
             pred_seq = pred_seq + [(config.PAD_ID, 0, 0)] * (len(gt_ids) - len(pred_seq))
             for p, g in zip(pred_seq, gt_ids):
