@@ -208,6 +208,10 @@ def train_epoch(
     n_batches = 0
 
     for batch_idx, batch in enumerate(tqdm(loader, desc=f"Epoch {epoch}", leave=False)):
+        # Normalize batch format: WebDataset returns (pc, src, tgt) tuples
+        if isinstance(batch, (list, tuple)):
+            batch = {'point_cloud': batch[0], 'src_tokens': batch[1], 'tgt_tokens': batch[2]}
+
         # v6.6-F: Null Emergence Suite (Placebo Control)
         if null_suite:
             batch = null_suite.transform_batch(batch)
@@ -911,6 +915,9 @@ def train(
              anchor_batch = next(iter(val_loader))
         elif train_loader:
              anchor_batch = next(iter(train_loader))
+        # Normalize: WebDataset returns (pc, src, tgt) tuples
+        if isinstance(anchor_batch, (list, tuple)):
+             anchor_batch = {'point_cloud': anchor_batch[0], 'src_tokens': anchor_batch[1], 'tgt_tokens': anchor_batch[2]}
 
         train_metrics = train_epoch(
             model, train_loader, optimizer, criterion, criterion_p, device, 
