@@ -118,8 +118,8 @@ class HiddenProbePool:
             self.pools = [[]]
             return
             
-        splits = np.array_split(all_batches, num_pools)
-        self.pools = [list(s) for s in splits]
+        idx_splits = np.array_split(range(len(all_batches)), num_pools)
+        self.pools = [[all_batches[i] for i in s] for s in idx_splits]
         
     def get_batch(self):
         pool = self.pools[self.active_idx]
