@@ -801,7 +801,7 @@ def train(
     intervention_engine = InterventionEngine(model)
     null_suite = NullEmergenceSuite(mode=os.environ.get("AK_NULL_MODE", "real"))
     fingerprint = FeatureFingerprint(top_k=5) # v6.6-F Level 3
-    semantics = SemanticsEngine(VOCAB) # v6.6-F Level 4
+    semantics = SemanticsEngine(config.VOCAB) # v6.6-F Level 4
     
     # Null Mode setup
     if null_suite.mode != "real":
