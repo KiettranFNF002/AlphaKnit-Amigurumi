@@ -1,7 +1,7 @@
 [project]
 name = "alphaknit-arigurumi"
-version = "6.6.1+g"
-description = "Mechanistic Discovery Engine for Amigurumi Topology"
+version = "7.0.0"
+description = "Mechanistic Discovery Engine for Amigurumi Topology (v7.0 Anti-Collapse Architecture)"
 authors = [{name = "T.A. Kiet", email = "akietakatak2705@gmail.com"}]
 dependencies = [
     "torch>=2.0.0",

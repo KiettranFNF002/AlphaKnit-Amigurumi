@@ -31,11 +31,11 @@ This version (**v7.0**) introduces the **Anti-Collapse Architecture** to solve t
 
 ```mermaid
 graph TD
-    A["Point Cloud (Amigurumi Geometries)"] --> B["PointNetEncoder"]
-    B --> C["KnittingTransformer (Grounded Latents)"]
-    C --> D["Mechanistic Discovery Engine (v6.6-G)"]
+    A["Point Cloud (Amigurumi Geometries)"] --> B["PointNetEncoder (multi-scale)"]
+    B --> C["KnittingTransformer (Topology-Aware Embeddings)"]
+    C --> D["Mechanistic Discovery Engine (v7.0 Anti-Collapse)"]
     D --> E["Gauss-Bonnet Constraints"]
-    F["Compilable Stitch Pattern"]
+    E --> F["Compilable Stitch Pattern"]
 ```
 
 ## 📊 Capability Milestones
@@ -70,16 +70,17 @@ Track **Curvature Flux**, **Fingerprint Stability**, and **Structural Margin**:
 python scripts/plot_v6_telemetry.py --history checkpoints/training_history_v6.6F.json
 ```
 
-## 🧪 Quick Audit (2026-02-22)
-- **Bug fixed**: `pyproject.toml` used a non-PEP440 version (`6.6.1-G`) that broke `pip install -e .`.
-- **Version consistency fixed**: package metadata now uses valid PEP440 (`6.6.1+g`) while preserving the `v6.6-G` release label in docs.
-- **Naive test discovery fixed**: `pytest` now only discovers tests in `/tests` to avoid accidental collection of diagnostic scripts in `/scripts`.
-- **Recommended next optimizations**:
-  - Split heavyweight dependencies (`torch`, `trimesh`, `webdataset`) into optional extras for faster CI.
-  - Add a lightweight CI lane for parser/compiler/tokenizer tests without GPU stack.
-  - Add version checks in CI to prevent future metadata drift.
+## 🧪 Quick Audit (v7.0 — 2026-03-04)
+- **Version bumped**: package metadata updated to `7.0.0` (PEP 440 compliant).
+- **Topology-Aware Embeddings added**: `row_emb`, `col_emb`, `parent_col_emb` injected into the decoder via DAG traversal (`compute_topology_fields`).
+- **Anti-Dominance Class Weights**: CrossEntropy loss now uses `sc=0.7`, `inc=2.0`, `dec=2.0` to prevent flat-tube mode collapse.
+- **AMP & `torch.compile` integrated**: Mixed Precision (FP16) via `torch.autocast` and Triton compilation enabled in `train.py`; dtype-mismatch hotfixes applied for Huber Loss and CrossEntropy under AMP backend.
+- **Recommended next steps**:
+  - Validate topology embeddings on synthetic sphere dataset (expect `inc`/`dec` token diversity > 15%).
+  - Profile `compute_topology_fields` CPU overhead vs. GPU training throughput at batch size 32.
+  - Add a lightweight CI lane for parser/compiler/tokenizer tests without the full GPU stack.
 
 ---
 **Status**: Research Mode (Mechanistic Discovery)
 **License**: MIT
-**Build**: v6.6-F-impl-5 (Differentiable Topology Integrated)
+**Build**: v7.0 (Anti-Collapse Architecture — Topology-Aware Embeddings + AMP)
