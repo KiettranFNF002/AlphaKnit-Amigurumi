@@ -509,6 +509,7 @@ def train_epoch(
         curvature_target[tgt_tokens[:, :, 0] == config.VOCAB.get("dec", 7)] = -1.0
         curvature_pred = getattr(model, "last_curvature_hint", None)
         if curvature_pred is not None:
+            curvature_pred = curvature_pred.float() # v7.0.7: cast to float32 for AMP backprop stability
             curv_valid = (tgt_tokens[:, :, 0] != config.PAD_ID).unsqueeze(-1)
             loss_curvature = F.huber_loss(curvature_pred[curv_valid], curvature_target[curv_valid], reduction="mean")
         else:
