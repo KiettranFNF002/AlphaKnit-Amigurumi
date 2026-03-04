@@ -213,9 +213,9 @@ def compute_topology_fields(tgt_tokens, pad_id=0):
     enriched[:, :, 0] = tgt_tokens[:, :, 0]  # type
     enriched[:, :, 1] = tgt_tokens[:, :, 1]  # p1
     enriched[:, :, 2] = tgt_tokens[:, :, 2]  # p2
-    enriched[:, :, 3] = row_ids.clamp(0, 63)
-    enriched[:, :, 4] = col_ids.clamp(0, 63)
-    enriched[:, :, 5] = parent_col_ids.clamp(0, 63)
+    enriched[:, :, 3] = row_ids.clamp(0, 127)
+    enriched[:, :, 4] = col_ids.clamp(0, 127)
+    enriched[:, :, 5] = parent_col_ids.clamp(0, 127)
     
     return enriched
 

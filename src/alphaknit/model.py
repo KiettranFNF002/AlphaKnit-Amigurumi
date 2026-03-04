@@ -182,9 +182,9 @@ class KnittingTransformer(nn.Module):
         self.pos_emb = nn.Embedding(max_seq_len, d_model)
 
         # v7.0: Topology-aware embeddings (anti-mode-collapse)
-        self.row_emb = nn.Embedding(64, d_model)         # row position in DAG
-        self.col_emb = nn.Embedding(64, d_model)          # column within row
-        self.parent_col_emb = nn.Embedding(64, d_model)   # parent's column in prev row
+        self.row_emb = nn.Embedding(128, d_model)         # row position in DAG
+        self.col_emb = nn.Embedding(128, d_model)          # column within row
+        self.parent_col_emb = nn.Embedding(128, d_model)   # parent's column in prev row
 
         # Transformer decoder layers
         decoder_layer = nn.TransformerDecoderLayer(
@@ -286,12 +286,13 @@ class KnittingTransformer(nn.Module):
         positions = torch.arange(T, device=tgt_tokens.device).unsqueeze(0)  # (1, T)
         tgt_emb = combined_emb + self.pos_emb(positions)      # (B, T, d_model)
 
-        # v7.0: Inject topology embeddings if available
+        # v7.0: Inject topology embeddings if available (scaled 0.5 to prevent magnitude explosion)
         if tgt_tokens.shape[-1] > 3 and hasattr(self, 'row_emb'):
-            row_ids = tgt_tokens[:, :, 3].clamp(0, 63)
-            col_ids = tgt_tokens[:, :, 4].clamp(0, 63)
-            pcol_ids = tgt_tokens[:, :, 5].clamp(0, 63)
-            tgt_emb = tgt_emb + self.row_emb(row_ids) + self.col_emb(col_ids) + self.parent_col_emb(pcol_ids)
+            row_ids = tgt_tokens[:, :, 3].clamp(0, 127)
+            col_ids = tgt_tokens[:, :, 4].clamp(0, 127)
+            pcol_ids = tgt_tokens[:, :, 5].clamp(0, 127)
+            topo_emb = self.row_emb(row_ids) + self.col_emb(col_ids) + self.parent_col_emb(pcol_ids)
+            tgt_emb = tgt_emb + 0.5 * topo_emb
 
         # Causal mask (prevent attending to future tokens)
         causal_mask = torch.zeros((T, T), dtype=tgt_emb.dtype, device=tgt_tokens.device)
@@ -387,12 +388,13 @@ class KnittingTransformer(nn.Module):
             positions = torch.arange(T, device=device).unsqueeze(0)
             tgt_emb = combined_emb + self.pos_emb(positions)
             
-            # v7.0: Inject topology embeddings during decode
+            # v7.0: Inject topology embeddings during decode (scaled 0.5)
             if hasattr(self, 'row_emb'):
-                r_ids = generated[:, :, 3].clamp(0, 63)
-                c_ids = generated[:, :, 4].clamp(0, 63)
-                pc_ids = generated[:, :, 5].clamp(0, 63)
-                tgt_emb = tgt_emb + self.row_emb(r_ids) + self.col_emb(c_ids) + self.parent_col_emb(pc_ids)
+                r_ids = generated[:, :, 3].clamp(0, 127)
+                c_ids = generated[:, :, 4].clamp(0, 127)
+                pc_ids = generated[:, :, 5].clamp(0, 127)
+                topo_emb = self.row_emb(r_ids) + self.col_emb(c_ids) + self.parent_col_emb(pc_ids)
+                tgt_emb = tgt_emb + 0.5 * topo_emb
             
             causal_mask = torch.triu(torch.ones((T, T), dtype=torch.bool, device=device), diagonal=1)
             
@@ -440,11 +442,11 @@ class KnittingTransformer(nn.Module):
                     parent_idx = max(0, cur_t - p1_val)
                     p_row = generated[b, parent_idx, 3].item() if parent_idx < generated.shape[1] else 0
                     p_col = generated[b, parent_idx, 4].item() if parent_idx < generated.shape[1] else 0
-                    new_row = min(p_row + 1, 63)
+                    new_row = min(p_row + 1, 127)
                     next_row[b, 0] = new_row
-                    next_pcol[b, 0] = min(p_col, 63)
+                    next_pcol[b, 0] = min(p_col, 127)
                     # Col = current cursor for this row
-                    next_col[b, 0] = min(col_cursors[b, new_row].item(), 63)
+                    next_col[b, 0] = min(col_cursors[b, new_row].item(), 127)
                     # Advance cursor
                     if t_type == 6:  # inc → +2
                         col_cursors[b, new_row] += 2
