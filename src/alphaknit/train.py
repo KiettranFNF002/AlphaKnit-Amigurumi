@@ -363,6 +363,11 @@ def train_epoch(
         # v6.6-G: Execution Step (The Primary Trajectory)
         with torch.autocast(device_type=device.type, enabled=scaler is not None):
             logits_type, logits_p1, logits_p2 = model(point_cloud, src_tokens_enriched, tgt_key_padding_mask=pad_mask)
+            
+        # v7.0.4: Cast back to float32 for loss computation and stability
+        logits_type = logits_type.float()
+        logits_p1 = logits_p1.float()
+        logits_p2 = logits_p2.float()
 
         # v6.6-G Level 5: True Counterfactual (fork_rng)
         shadow_delta = 0.0
@@ -375,6 +380,9 @@ def train_epoch(
                        with torch.autocast(device_type=device.type, enabled=scaler is not None):
                             s_logits_type, _, _ = model(point_cloud, src_tokens_enriched, tgt_key_padding_mask=pad_mask)
                   intervention_engine.shadow_mode = False
+                  
+                  # Cast back to float32
+                  s_logits_type = s_logits_type.float()
                   
                   p_real = torch.softmax(logits_type, dim=-1).detach()
                   p_shadow = torch.softmax(s_logits_type, dim=-1)
@@ -715,6 +723,11 @@ def evaluate(
         src_tokens_enriched = compute_topology_fields(src_tokens, pad_id=config.PAD_ID)
         with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
             logits_type, logits_p1, logits_p2 = model(point_cloud, src_tokens_enriched, tgt_key_padding_mask=pad_mask)
+
+        # Cast back to float32 for loss computation
+        logits_type = logits_type.float()
+        logits_p1 = logits_p1.float()
+        logits_p2 = logits_p2.float()
 
         B, T, _ = tgt_tokens.shape
         V = logits_type.shape[-1]
