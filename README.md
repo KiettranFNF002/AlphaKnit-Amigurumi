@@ -1,6 +1,6 @@
 # AlphaKnit 🧶 — v7.0 "Anti-Collapse Architecture"
 
-AlphaKnit is a **Mechanistic Discovery Engine** designed to solve the physics of **Amigurumi Topology**. It reframes Machine Learning not as a pattern generator, but as a scientific instrument for exploring geometric morphogenesis.
+AlphaKnit is an AI system designed to **generate Amigurumi knitting patterns directly from 3D models**. To solve the complex physics of **Amigurumi Topology**, it utilizes a **Mechanistic Discovery** approach—applying scientific principles to systematically uncover the correct architectural path and geometric representations faster.
 
 This version (**v7.0**) introduces the **Anti-Collapse Architecture** to solve the severe "flat-tube" mode collapse observed in v6.6, while retaining the 5 levels of scientific grounding from v6.6-F.
 
