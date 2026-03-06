@@ -1,0 +1,21 @@
+# Báo Cáo Tổng Hợp Vấn Đề Training AlphaKnit (v7.0)
+
+## 1. Hiện Tượng Quan Sát Được
+- **Suy giảm chất lượng ở các Epoch sau:** Checkpoint `golden_epoch_095.pt` cho ra kết quả dự đoán tồi tệ hơn hẳn so với các checkpoint cũ (như `golden_epoch_033.pt` hay `035.pt`).
+- **Lỗi Topology/Locality nghiêm trọng:** Output của epoch 95 bị Validator báo hàng loạt lỗi `[LOW] locality`, nghĩa là model tạo ra các mũi giảm (decrease) bắt nguồn từ 2 mũi cha (parents) nằm cách rất xa nhau về mặt vật lý (ví dụ: cột 0 và 19, hoặc 38 và 97). Điều này vi phạm nguyên tắc cơ bản của đan móc Amigurumi là các mũi phải liên kết cục bộ.
+- **Không xảy ra Mode Collapse:** Khi test script `test_mode_collapse.py` trên 4 loại hình học 3D khác nhau (Sphere, Cylinder, Box), model ở epoch 95 vẫn sinh ra 4 đoạn pattern (mã đan) hoàn toàn cấu trúc khác nhau. Điều này chứng tỏ model vẫn đang condition tốt dựa vào hình dáng Point Cloud đầu vào (không bị bệnh hội tụ về một kết quả duy nhất - mode collapse).
+
+## 2. Suy Đoán Nguyên Nhân Cốt Lõi
+Hiện tượng "càng train lâu, loss có thể vẫn giảm hoặc đi ngang nhưng chất lượng thực tế (mặt Topology) lại nát bét" là dấu hiệu điển hình của việc **Overfitting (Quá khớp)** kết hợp với **việc bị mất cân bằng Loss**, hoàn toàn **không** phải do mô hình thiếu độ phức tạp. 
+
+**Cụ thể:**
+- **Model đã ghi nhớ (Memorize) Dataset:** Ở các epoch sau (đặc biệt từ 50-100), thay vì học "quy tắc vật lý/hình học tổng quát" (generalization), model bắt đầu học vẹt cấu trúc của các Point Cloud trong training set để ép cross-entropy loss xuống thấp. Hậu quả là khi gặp dữ liệu validation/test hơi khác biệt, phần dự đoán `P1_OFFSET` và `P2_OFFSET` bị nhiễu loạn, dẫn tới việc chỉ định sai mũi cha ở tận đầu kia sản phẩm.
+- **Sức ép từ Topology Tension bị lờ đi:** Mặc dù `loss_tension`, `loss_dist` và `loss_topo` (Gauss-Bonnet) được thiết kế để giữ các kết nối gần nhau (Distance Regularization), trọng số (weight) của chúng có thể đang quá nhỏ so với `loss_type` khi epoch càng lớn. Model tìm ra "đường tắt" (shortcut) để giảm loss chính mà bất chấp tính cục bộ.
+- **Thiếu Early Stopping:** Điểm rơi phong độ (Golden Epoch) của architecture hiện tại là quanh khoảng epoch 30-40. Việc tiếp tục chạy đến 100 epoch với learning rate quá nhỏ (hoặc không dừng lại) cày nát các weight vốn đã hội tụ tốt.
+
+## 3. Khuyến Nghị Giải Pháp
+- **KHÔNG tăng kích thước mô hình (Layer/Dimension):** Vì việc này sẽ khuếch đại tình trạng Overfit diễn ra nhanh hơn nữa.
+- **Bắt và chọn Checkpoint sớm (Early Stopping):** Chỉ nên dùng các checkpoint trong giai đoạn epoch 30-40. Cần thiết lập function tự động stop khi `val_loss_dist` hoặc `val_topology_error` bắt đầu có dấu hiệu tăng ngược trở lại (dù train_loss vẫn giảm).
+- **Tăng Data Augmentation (Noise):** Làm khó model hơn bằng cách tăng `radius_scale` (làm nhiễu tọa độ 3D) và `parent_noise_prob` trong lúc train để ngăn chặn học vẹt.
+- **Tinh chỉnh lại hệ số Loss (Loss Balancing):** Cân nhắc tăng hệ số `0.01 * loss_dist` lên cao hơn ở nửa sau của quá trình train (ví dụ tăng lên 0.05 hoặc 0.1) để trừng phạt thật nặng các kết nối tạo ra mũi cha quá xa nhau. Mức độ `tension_weight` cũng nên được scale theo epoch.
+- **Tăng Dropout:** Thêm hoặc tăng `dropout` layer ở các Transformer block cuối để ép model phải dùng các đặc trưng robust hơn thay vì ghi nhớ bề mặt.
